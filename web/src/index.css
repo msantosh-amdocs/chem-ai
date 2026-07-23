@@ -110,6 +110,32 @@
   margin: 0.8em 0;
 }
 .md pre code { background: transparent; color: inherit; padding: 0; }
+/* Mermaid diagrams rendered client-side from ```mermaid fenced blocks. */
+.md .md-mermaid {
+  margin: 0.9em 0;
+  padding: 0.75em 1em;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow-x: auto;
+  text-align: center;
+}
+.md .md-mermaid svg {
+  max-width: 100%;
+  height: auto;
+  display: inline-block;
+}
+.md .md-mermaid-error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  text-align: left;
+}
+.md .md-mermaid-error .md-mermaid-error-note {
+  color: #7f1d1d;
+  font-size: 0.85em;
+  margin-bottom: 0.4em;
+  font-family: "SFMono-Regular", Menlo, monospace;
+}
 .md blockquote {
   border-left: 3px solid #cbd5e1;
   padding-left: 0.9em;
