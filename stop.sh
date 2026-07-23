@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Market Research Group — stop any running dev servers on the standard ports.
+# Chem AI — stop any running dev servers on the standard ports.
 set -euo pipefail
 
 for p in 5277 5278; do

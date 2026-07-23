@@ -1,4 +1,4 @@
-// The Market Research Group specialist team. All settings are user-editable.
+// The Chem AI specialist team. All settings are user-editable.
 // Storage schema: mr.specialists.v1
 
 export type SpecialistRole =

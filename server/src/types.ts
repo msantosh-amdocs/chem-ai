@@ -1,5 +1,5 @@
 /**
- * Domain types for the market-research-group app.
+ * Domain types for the Chem AI app.
  *
  * A session takes a raw idea (a new factory or expansion in the chemical,
  * pharma, or semiconductor industry), refines it with the Analyst via

@@ -1,8 +1,8 @@
 {
-  "name": "market-research-group",
+  "name": "chem-ai",
   "private": true,
   "version": "0.1.0",
-  "description": "A multi-department AI agent team that turns a factory / expansion idea (chemical, pharma, semiconductor) into a full research pack — Market Analysis, Procedure, Procurement, Finance, IP, Presentation — powered by the Cursor SDK.",
+  "description": "Chem AI — a multi-department AI agent team that turns a factory / expansion idea (chemical, pharma, semiconductor) into a full research pack: Market Analysis, Procedure, Procurement, Finance, IP, Presentation. Powered by the Cursor SDK.",
   "workspaces": ["web", "server"],
   "scripts": {
     "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w server\" \"npm run dev -w web\"",

@@ -1,4 +1,4 @@
-# Market Research Group
+# Chem AI
 
 A local, private, single-user tool for **market researchers scoping new
 factories or business expansions** in the **chemical, pharmaceutical, and

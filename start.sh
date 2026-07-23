@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Market Research Group — startup script
+# Chem AI — startup script
 # Usage:  ./start.sh [--no-open] [--no-install]
 #
 # Boots the API (port 5278) and web (port 5277) dev servers, waits for both
@@ -22,7 +22,7 @@ for arg in "$@"; do
     --no-install) DO_INSTALL=0 ;;
     -h|--help)
       cat <<EOF
-Market Research Group startup
+Chem AI startup
 
 Usage:
   ./start.sh [--no-open] [--no-install]
@@ -52,7 +52,7 @@ warn()  { printf "${YLW}⚠${R} %s\n" "$*"; }
 fail()  { printf "${RED}✗${R} %s\n" "$*" >&2; }
 
 banner() {
-  printf "\n${B}${MAG}Market Research Group${R} ${DIM}· idea \u2192 refined concept \u2192 Market / Procedure / Procurement / Finance / IP / Presentation${R}\n"
+  printf "\n${B}${MAG}Chem AI${R} ${DIM}· idea \u2192 refined concept \u2192 Market / Procedure / Procurement / Finance / IP / Presentation${R}\n"
   printf "${DIM}──────────────────────────────────────────────────${R}\n"
 }
 
@@ -154,7 +154,7 @@ main() {
 
   cleanup() {
     printf "\n"
-    info "Stopping Market Research Group…"
+    info "Stopping Chem AI…"
     [ -n "$TAIL1" ] && kill "$TAIL1" 2>/dev/null || true
     [ -n "$TAIL2" ] && kill "$TAIL2" 2>/dev/null || true
     for parent in "$SERVER_PID" "$WEB_PID"; do
@@ -195,7 +195,7 @@ main() {
     esac
   fi
 
-  printf "\n${B}${GRN}Market Research Group is running.${R}\n"
+  printf "\n${B}${GRN}Chem AI is running.${R}\n"
   printf "  ${B}App:${R}  http://localhost:$WEB_PORT\n"
   printf "  ${B}API:${R}  http://localhost:$API_PORT/api/health\n"
   printf "  ${B}Logs:${R} .logs/server.log · .logs/web.log\n"

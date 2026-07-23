@@ -38,7 +38,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 app.listen(config.port, () => {
-  console.log(`Market Research Group API listening on http://localhost:${config.port}`);
+  console.log(`Chem AI API listening on http://localhost:${config.port}`);
   if (!process.env.CURSOR_API_KEY) {
     console.warn("⚠  CURSOR_API_KEY not set — LLM calls will fail. Add it to .env.");
   }

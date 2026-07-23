@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Market Research Group — pull-latest script
+# Chem AI — pull-latest script
 # Usage:  ./pull.sh [--merge] [--branch <name>] [--stash-wip] [--remote <name>]
 #
 # Fetches the latest commits from the remote and updates the current branch
@@ -31,7 +31,7 @@ while [ $# -gt 0 ]; do
     --branch)     BRANCH="${2:?--branch needs a name}"; shift 2 ;;
     -h|--help)
       cat <<EOF
-Market Research Group — pull latest changes from remote
+Chem AI — pull latest changes from remote
 
 Usage:
   ./pull.sh [--merge] [--branch <name>] [--stash-wip] [--remote <name>]
@@ -63,7 +63,7 @@ warn()  { printf "${YLW}⚠${R} %s\n" "$*"; }
 fail()  { printf "${RED}✗${R} %s\n" "$*" >&2; }
 
 banner() {
-  printf "\n${B}${MAG}Market Research Group${R} ${DIM}· pull latest from ${REMOTE}${R}\n"
+  printf "\n${B}${MAG}Chem AI${R} ${DIM}· pull latest from ${REMOTE}${R}\n"
   printf "${DIM}──────────────────────────────────────────────────${R}\n"
 }
 

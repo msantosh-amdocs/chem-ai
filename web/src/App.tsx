@@ -47,7 +47,7 @@ export default function App() {
         {tab === "history" && <HistoryPage />}
       </main>
       <footer className="text-center text-xs text-slate-500 py-4">
-        Market Research Group · local, private, Cursor SDK-powered
+        Chem AI · local, private, Cursor SDK-powered
       </footer>
     </div>
   );

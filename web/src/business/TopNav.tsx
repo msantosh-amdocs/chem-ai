@@ -39,12 +39,12 @@ export function TopNav({
         <button
           onClick={() => onSelectTab("new")}
           className="flex items-center gap-2 group"
-          title="Market Research Group"
+          title="Chem AI"
         >
           <Logo />
           <div className="leading-tight text-left">
             <div className="font-display font-semibold text-slate-900">
-              Market Research Group
+              Chem AI
             </div>
             <div className="text-[11px] text-slate-500 -mt-0.5">
               A factory idea in. A market-research pack out.
