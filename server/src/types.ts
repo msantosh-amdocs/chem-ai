@@ -74,11 +74,83 @@ export interface StageTeam {
   minMembers: number;
 }
 
+/**
+ * How a department's debate loop decides to stop.
+ *
+ * - `threshold_or_max` (default): stop as soon as every member's self-
+ *   scored agreement hits `threshold` OR we hit `maxRounds`, whichever
+ *   comes first. This is the classic behaviour.
+ * - `threshold_only`: only stop when the threshold is met; `maxRounds` is
+ *   ignored. A hard safety cap (`HARD_ROUND_CAP` in the orchestrator)
+ *   still applies so a runaway debate can't spin forever.
+ * - `max_only`: always run every round up to `maxRounds` regardless of
+ *   agreement. Useful when the operator wants a deep debate trail even
+ *   after early consensus.
+ */
+export type TerminationPolicy =
+  | "threshold_or_max"
+  | "threshold_only"
+  | "max_only";
+
 export interface GenerationSettings {
   /** Debate stops when every member reports agreement ≥ threshold. Default 95. */
   threshold: number;
   /** Upper bound on debate rounds per department. Default 4. */
   maxRounds: number;
+  /**
+   * How to combine `threshold` and `maxRounds`. Optional for backward
+   * compatibility with sessions written before this field existed —
+   * unset means `"threshold_or_max"`.
+   */
+  terminationPolicy?: TerminationPolicy;
+}
+
+/**
+ * Cost accounting for a single LLM call — mirrors the Cursor SDK
+ * `TokenUsage` fields plus the estimated USD we computed at the time
+ * of the call.
+ */
+export interface LlmCallCost {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  /** Estimate — see `agents/costs.ts` for the rate table. */
+  estimatedUsd: number;
+  /** ISO timestamp of when the call completed. */
+  at: string;
+}
+
+/**
+ * Aggregated cost for a single scope (analyst refinement, one department,
+ * or the whole session).
+ */
+export interface StageCost {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  estimatedUsd: number;
+  llmCalls: number;
+}
+
+export interface SessionCosts {
+  /** Refinement rounds + refined-concept generation by the analyst. */
+  analyst: StageCost;
+  /** Debate calls, keyed by department kind. */
+  perTeam: Partial<Record<DocumentKind, StageCost>>;
+  /** Whole-session rollup. */
+  total: StageCost;
+  /**
+   * Whether the underlying SDK reported usage for every call. When false,
+   * the estimate is a lower bound — some calls contributed no cost.
+   */
+  usageComplete: boolean;
 }
 
 export interface UploadedDoc {
@@ -207,6 +279,9 @@ export interface ArchitectureSession {
   refinedIdea?: RefinedIdea;
 
   artifacts: DocumentArtifact[];
+
+  /** Rolled-up token + estimated USD cost. Populated as the run progresses. */
+  costs?: SessionCosts;
 
   error?: string;
 }

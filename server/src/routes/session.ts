@@ -85,7 +85,10 @@ const specialistsPayloadSchema = z.object({
 
 const settingsSchema = z.object({
   threshold: z.number().int().min(50).max(100).default(95),
-  maxRounds: z.number().int().min(2).max(6).default(4),
+  maxRounds: z.number().int().min(2).max(8).default(4),
+  terminationPolicy: z
+    .enum(["threshold_or_max", "threshold_only", "max_only"])
+    .default("threshold_or_max"),
 });
 
 const startBodySchema = z.object({

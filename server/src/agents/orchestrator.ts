@@ -1,4 +1,5 @@
-import { promptModel } from "./llm.js";
+import { promptModel, type PromptResult } from "./llm.js";
+import { priceUsage, roundUsd } from "./costs.js";
 import {
   refinePrompt,
   refinedConceptPrompt,
@@ -15,13 +16,117 @@ import type {
   DocumentArtifact,
   DocumentKind,
   GenerationSettings,
+  LlmCallCost,
   RefinementRound,
+  SessionCosts,
   Specialist,
+  StageCost,
   StageRound,
   StageRoundDraft,
   StageTeam,
+  TerminationPolicy,
   UploadedDoc,
 } from "../types.js";
+
+/**
+ * Hard safety cap on debate rounds when `terminationPolicy === "threshold_only"`.
+ * A misconfigured session (e.g. threshold impossibly high) must not spin
+ * forever burning credits — this ceiling ensures the loop eventually
+ * exits even if agreement never converges.
+ */
+const HARD_ROUND_CAP = 20;
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Cost accounting
+ * ────────────────────────────────────────────────────────────────────────── */
+
+function emptyStageCost(): StageCost {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+    estimatedUsd: 0,
+    llmCalls: 0,
+  };
+}
+
+function emptySessionCosts(): SessionCosts {
+  return {
+    analyst: emptyStageCost(),
+    perTeam: {},
+    total: emptyStageCost(),
+    usageComplete: true,
+  };
+}
+
+/**
+ * Merge a single LLM call's cost into a `StageCost` accumulator, in place.
+ * Returns the merged accumulator for convenient chaining.
+ */
+function addToStage(target: StageCost, call: LlmCallCost): StageCost {
+  target.inputTokens += call.inputTokens;
+  target.outputTokens += call.outputTokens;
+  target.cacheReadTokens += call.cacheReadTokens;
+  target.cacheWriteTokens += call.cacheWriteTokens;
+  target.reasoningTokens += call.reasoningTokens;
+  target.totalTokens += call.totalTokens;
+  target.estimatedUsd = roundUsd(target.estimatedUsd + call.estimatedUsd);
+  target.llmCalls += 1;
+  return target;
+}
+
+/** Where to attribute a single call's cost. */
+type CostScope =
+  | { kind: "analyst" }
+  | { kind: "team"; team: DocumentKind };
+
+/**
+ * Wrapper around `promptModel` that records the call's TokenUsage against
+ * the session's cost ledger. This is the ONLY LLM entry point used by the
+ * orchestrator — every debate/refinement call flows through here so the
+ * `session.costs` we persist is always complete.
+ */
+async function tracedPrompt(
+  session: ArchitectureSession,
+  scope: CostScope,
+  modelId: string,
+  prompt: string,
+  systemHint?: string,
+  params?: Record<string, string>,
+): Promise<PromptResult> {
+  const res = await promptModel(modelId, prompt, systemHint, params);
+
+  if (!session.costs) session.costs = emptySessionCosts();
+  const costs = session.costs;
+  const u = res.usage;
+
+  const call: LlmCallCost = {
+    model: res.model,
+    inputTokens: u?.inputTokens ?? 0,
+    outputTokens: u?.outputTokens ?? 0,
+    cacheReadTokens: u?.cacheReadTokens ?? 0,
+    cacheWriteTokens: u?.cacheWriteTokens ?? 0,
+    reasoningTokens: u?.reasoningTokens ?? 0,
+    totalTokens: u?.totalTokens ?? 0,
+    estimatedUsd: roundUsd(priceUsage(res.model, u)),
+    at: new Date().toISOString(),
+  };
+  if (!u) costs.usageComplete = false;
+
+  if (scope.kind === "analyst") {
+    addToStage(costs.analyst, call);
+  } else {
+    const bucket = costs.perTeam[scope.team] ?? emptyStageCost();
+    addToStage(bucket, call);
+    costs.perTeam[scope.team] = bucket;
+  }
+  addToStage(costs.total, call);
+
+  return res;
+}
 
 /* ────────────────────────────────────────────────────────────────────────── *
  * Event stream
@@ -136,7 +241,14 @@ export async function runRefinementRound(
     docTexts,
   );
 
-  const raw = await promptModel(analyst.model, user, system, analyst.params);
+  const { text: raw } = await tracedPrompt(
+    session,
+    { kind: "analyst" },
+    analyst.model,
+    user,
+    system,
+    analyst.params,
+  );
   const parsed = parseJsonLoose<Partial<AnalystRoundOutput>>(raw) ?? {};
   const round: RefinementRound = {
     n: session.refinement.length + 1,
@@ -180,7 +292,15 @@ export async function lockAndProduceConcept(
     session.refinement,
     docTexts,
   );
-  const content = (await promptModel(analyst.model, user, system, analyst.params)).trim();
+  const { text } = await tracedPrompt(
+    session,
+    { kind: "analyst" },
+    analyst.model,
+    user,
+    system,
+    analyst.params,
+  );
+  const content = text.trim();
   session.refinedIdea = { content, createdAt: new Date().toISOString() };
   session.status = "locked";
   session.updatedAt = new Date().toISOString();
@@ -206,6 +326,7 @@ interface ReviseResult {
 }
 
 async function runStageDebate(
+  session: ArchitectureSession,
   team: StageTeam,
   refinedConcept: string,
   upstream: UpstreamArtifacts,
@@ -221,6 +342,11 @@ async function runStageDebate(
   }
   const lead = team.members[0]!;
   const rounds: StageRound[] = [];
+  const policy: TerminationPolicy = settings.terminationPolicy ?? "threshold_or_max";
+  const effectiveMaxRounds =
+    policy === "threshold_only"
+      ? HARD_ROUND_CAP
+      : Math.max(1, settings.maxRounds);
 
   emit({
     type: "artifact.started",
@@ -249,10 +375,17 @@ async function runStageDebate(
         upstream,
         docTexts,
       );
-      const content = (await promptModel(m.model, user, system, m.params)).trim();
+      const { text } = await tracedPrompt(
+        session,
+        { kind: "team", team: team.kind },
+        m.model,
+        user,
+        system,
+        m.params,
+      );
       return {
         memberId: m.id,
-        content,
+        content: text.trim(),
         agreementWithOthers: 0,
         createdAt: new Date().toISOString(),
       } satisfies StageRoundDraft;
@@ -272,9 +405,9 @@ async function runStageDebate(
   });
   await onRound(rounds);
 
-  // ── Rounds 2..maxRounds: critique + revise + score ─────────────────────
+  // ── Rounds 2..effectiveMaxRounds: critique + revise + score ────────────
   let terminatedBy: "agreement" | "maxRounds" = "maxRounds";
-  for (let n = 2; n <= settings.maxRounds; n++) {
+  for (let n = 2; n <= effectiveMaxRounds; n++) {
     const prior = rounds[rounds.length - 1]!;
     const startedAt = new Date().toISOString();
     emit({
@@ -306,7 +439,14 @@ async function runStageDebate(
           settings.threshold,
           n,
         );
-        const raw = await promptModel(m.model, user, system, m.params);
+        const { text: raw } = await tracedPrompt(
+          session,
+          { kind: "team", team: team.kind },
+          m.model,
+          user,
+          system,
+          m.params,
+        );
         const parsed = parseJsonLoose<Partial<ReviseResult>>(raw);
         const revised = (parsed?.revised ?? "").toString().trim() || own.content;
         const critique = (parsed?.critique ?? "").toString().trim();
@@ -331,7 +471,11 @@ async function runStageDebate(
     });
     await onRound(rounds);
 
-    if (converged) {
+    // Termination policy — see `TerminationPolicy` doc-comment in types.ts:
+    //   threshold_or_max : stop on either (default)
+    //   threshold_only   : ignore maxRounds; stop only on convergence
+    //   max_only         : ignore convergence; always run every round
+    if (converged && policy !== "max_only") {
       terminatedBy = "agreement";
       break;
     }
@@ -425,6 +569,7 @@ export async function runGeneration(
         finance: artifacts.get("finance"),
       };
       const artifact = await runStageDebate(
+        session,
         team,
         session.refinedIdea!.content,
         upstream,

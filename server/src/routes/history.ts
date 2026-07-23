@@ -52,7 +52,12 @@ function summarize(s: ArchitectureSession) {
     completeness: lastRound?.completeness ?? null,
     documents: Array.isArray(s.documents) ? s.documents.length : 0,
     hasRefinedIdea: !!s.refinedIdea,
-    settings: s.settings ?? { threshold: 95, maxRounds: 4 },
+    settings: s.settings ?? {
+      threshold: 95,
+      maxRounds: 4,
+      terminationPolicy: "threshold_or_max",
+    },
+    costs: s.costs ?? null,
     analyst: analyst
       ? { id: analyst.id, name: analyst.name, model: analyst.model }
       : { id: "", name: "?", model: "?" },

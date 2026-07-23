@@ -29,9 +29,40 @@ export interface StageTeamSnapshot {
   members: SpecialistSnapshot[];
 }
 
+/**
+ * How a department's debate loop decides to stop.
+ * See `server/src/types.ts` for the canonical documentation — this must
+ * stay in sync with the server enum.
+ */
+export type TerminationPolicy =
+  | "threshold_or_max"
+  | "threshold_only"
+  | "max_only";
+
 export interface GenerationSettings {
   threshold: number;
   maxRounds: number;
+  /** Optional for backward-compat with sessions written before this field existed. */
+  terminationPolicy?: TerminationPolicy;
+}
+
+/** Aggregated token / USD estimate for a single scope. */
+export interface StageCost {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  estimatedUsd: number;
+  llmCalls: number;
+}
+
+export interface SessionCosts {
+  analyst: StageCost;
+  perTeam: Partial<Record<DocumentKind, StageCost>>;
+  total: StageCost;
+  usageComplete: boolean;
 }
 
 export interface ClarifyQuestion {
@@ -125,6 +156,8 @@ export interface ArchitectureSession {
   refinement: RefinementRound[];
   refinedIdea?: RefinedIdea;
   artifacts: DocumentArtifact[];
+  /** Rolled-up token + estimated USD cost. Populated as the run progresses. */
+  costs?: SessionCosts;
   error?: string;
 }
 
@@ -140,6 +173,8 @@ export interface HistorySummary {
   documents: number;
   hasRefinedIdea: boolean;
   settings: GenerationSettings;
+  /** Rolled-up token + USD cost estimate, or null if the run never produced any. */
+  costs: SessionCosts | null;
   analyst: { id: string; name: string; model: string };
   teams: Array<{
     kind: DocumentKind;
