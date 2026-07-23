@@ -9,6 +9,7 @@ import {
   useStore,
   KIND_LABELS,
   KIND_MIN_MEMBERS,
+  KIND_MAX_MEMBERS,
   KIND_SHORT,
   PRODUCER_KINDS,
   type DocumentKind,
@@ -218,14 +219,15 @@ export function SpecialistsPage() {
         const team = specialists.teams.find((t) => t.kind === kind);
         if (!team) return null;
         const min = KIND_MIN_MEMBERS[kind];
+        const max = KIND_MAX_MEMBERS[kind];
+        const atMax = team.members.length >= max;
         return (
           <section key={kind}>
             <TeamHeader
               kind={kind}
               min={min}
+              max={max}
               count={team.members.length}
-              onAdd={() => addAndOpen(kind)}
-              canAdd={team.members.length < 6}
             />
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
               {team.members.map((m, idx) => (
@@ -237,7 +239,9 @@ export function SpecialistsPage() {
                   onOpen={() => openMember(kind, m.id)}
                 />
               ))}
-              <AddTile onClick={() => addAndOpen(kind)} disabled={team.members.length >= 6} />
+              {!atMax && (
+                <AddTile onClick={() => addAndOpen(kind)} max={max} />
+              )}
             </div>
           </section>
         );
@@ -306,18 +310,12 @@ function SpecialistTile({
   );
 }
 
-function AddTile({ onClick, disabled }: { onClick: () => void; disabled: boolean }) {
+function AddTile({ onClick, max }: { onClick: () => void; max: number }) {
   return (
     <button
       onClick={onClick}
-      disabled={disabled}
-      className={clsx(
-        "rounded-xl border-2 border-dashed p-4 text-slate-500 hover:text-slate-800 flex flex-col items-center justify-center gap-1 transition-all",
-        disabled
-          ? "border-slate-200 opacity-40 cursor-not-allowed"
-          : "border-slate-300 hover:border-slate-500 hover:bg-slate-50",
-      )}
-      title={disabled ? "Maximum team size reached (6)" : "Add another specialist to this team"}
+      className="rounded-xl border-2 border-dashed border-slate-300 hover:border-slate-500 hover:bg-slate-50 p-4 text-slate-500 hover:text-slate-800 flex flex-col items-center justify-center gap-1 transition-all"
+      title={`Add another specialist to this team (max ${max})`}
     >
       <span className="text-2xl leading-none">+</span>
       <span className="text-xs font-medium">Add specialist</span>
@@ -328,19 +326,18 @@ function AddTile({ onClick, disabled }: { onClick: () => void; disabled: boolean
 function TeamHeader({
   kind,
   min,
+  max,
   count,
-  onAdd,
-  canAdd,
 }: {
   kind: DocumentKind;
   min: number;
+  max: number;
   count: number;
-  onAdd: () => void;
-  canAdd: boolean;
 }) {
   const short = KIND_SHORT[kind];
   const full = KIND_LABELS[kind];
   const belowMin = count < min;
+  const atMax = count >= max;
   return (
     <div className="flex items-baseline justify-between mb-3">
       <div className="flex items-baseline gap-3">
@@ -348,17 +345,23 @@ function TeamHeader({
         <span className="text-sm text-slate-500">{full}</span>
       </div>
       <div className="flex items-center gap-3 text-sm">
-        <span className={belowMin ? "text-rose-600 font-medium" : "text-slate-500"}>
-          {count} member{count === 1 ? "" : "s"} · minimum {min}
-        </span>
-        <button
-          className="btn btn-ghost text-xs"
-          onClick={onAdd}
-          disabled={!canAdd}
-          title={canAdd ? "Add another team member" : "Maximum team size reached"}
+        <span
+          className={
+            belowMin
+              ? "text-rose-600 font-medium"
+              : atMax
+                ? "text-slate-400"
+                : "text-slate-500"
+          }
+          title={
+            atMax
+              ? `Team is at its maximum of ${max} members`
+              : `Minimum ${min}, maximum ${max}`
+          }
         >
-          + Add specialist
-        </button>
+          {count} member{count === 1 ? "" : "s"} · min {min} · max {max}
+          {atMax && " · full"}
+        </span>
       </div>
     </div>
   );
