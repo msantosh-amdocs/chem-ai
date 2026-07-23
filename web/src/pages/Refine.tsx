@@ -17,6 +17,21 @@ export function RefinePage() {
   const live = useLive();
   const { setDraftAnswer, submitRefinement, lockIdea } = useConnectorActions();
 
+  // Derived values used below. IMPORTANT: every hook must be called on every
+  // render in a stable order (Rules of Hooks). `useMemo` is called BEFORE
+  // any conditional early-returns; that used to sit after the guards below,
+  // which caused a "Rendered more hooks than during the previous render"
+  // crash the moment `currentSession` flipped from null to populated and
+  // unmounted the whole app tree.
+  const rounds = currentSession?.refinement ?? [];
+  const latest = rounds[rounds.length - 1];
+  const highUnanswered = useMemo(() => {
+    if (!latest) return 0;
+    return latest.questions.filter(
+      (q) => q.importance === "high" && !(draftAnswers[q.id] ?? "").trim(),
+    ).length;
+  }, [latest, draftAnswers]);
+
   if (!currentSession) {
     if (live.running || live.refining) {
       return (
@@ -48,18 +63,8 @@ export function RefinePage() {
   }
 
   const analyst = currentSession.specialists.analyst;
-  const rounds = currentSession.refinement;
-  const latest = rounds[rounds.length - 1];
-
   const busy = live.refining || live.concepting;
   const readyForLock = latest && latest.completeness >= 85;
-
-  const highUnanswered = useMemo(() => {
-    if (!latest) return 0;
-    return latest.questions.filter(
-      (q) => q.importance === "high" && !(draftAnswers[q.id] ?? "").trim(),
-    ).length;
-  }, [latest, draftAnswers]);
 
   return (
     <div className="max-w-[1200px] mx-auto space-y-6">
