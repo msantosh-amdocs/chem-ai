@@ -1,0 +1,139 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background:
+      radial-gradient(1400px 900px at 5% -10%, #eef2ff 0%, transparent 55%),
+      radial-gradient(1200px 800px at 105% 10%, #fff7ed 0%, transparent 60%),
+      radial-gradient(1000px 700px at 100% 100%, #ecfeff 0%, transparent 60%),
+      #f8fafc;
+    color: #0f172a;
+  }
+  h1, h2, h3, h4 { font-family: "Fraunces", Georgia, serif; }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl bg-white border border-slate-200 shadow-card;
+  }
+  .card-quiet {
+    @apply rounded-xl bg-white/70 border border-slate-200/80;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
+           transition-all border border-transparent
+           focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-offset-white;
+  }
+  .btn-primary {
+    @apply bg-slate-900 text-white hover:bg-slate-800 focus:ring-slate-400 shadow-sm;
+  }
+  .btn-ghost {
+    @apply bg-white text-slate-700 hover:bg-slate-50 border-slate-200;
+  }
+  .btn-outline {
+    @apply bg-white text-slate-800 border-slate-300 hover:border-slate-400 hover:bg-slate-50;
+  }
+  .btn-secondary {
+    @apply btn bg-white text-slate-800 border-slate-300 hover:border-slate-400 hover:bg-slate-50;
+  }
+  .btn-danger {
+    @apply bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-200;
+  }
+  .field {
+    @apply w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm
+           placeholder:text-slate-400 focus:outline-none focus:border-slate-500
+           focus:ring-2 focus:ring-slate-200 text-slate-900;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs
+           bg-slate-100 border border-slate-200 text-slate-700;
+  }
+  .tab {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium
+           text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors;
+  }
+  .tab-active {
+    @apply bg-slate-900 text-white hover:bg-slate-900 hover:text-white;
+  }
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+  .scroll-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scroll-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  .scroll-thin::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+}
+
+/* Simple markdown styling for content rendered via `marked`. */
+.md {
+  line-height: 1.65;
+  color: #1f2937;
+  font-size: 0.95rem;
+}
+.md h1, .md h2, .md h3, .md h4 {
+  font-family: "Fraunces", Georgia, serif;
+  color: #0f172a;
+  margin: 1em 0 0.4em;
+}
+.md h1 { font-size: 1.6rem; }
+.md h2 { font-size: 1.3rem; }
+.md h3 { font-size: 1.1rem; font-weight: 600; }
+.md h4 { font-size: 1rem; font-weight: 600; }
+.md p { margin: 0.6em 0; }
+.md ul, .md ol { margin: 0.5em 0 0.5em 1.4em; }
+.md li { margin: 0.2em 0; }
+.md strong { color: #0f172a; font-weight: 600; }
+.md em { color: #334155; }
+.md code {
+  background: #f1f5f9;
+  color: #0f172a;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-size: 0.875em;
+  font-family: "SFMono-Regular", Menlo, monospace;
+}
+.md pre {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 0.9em 1em;
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+.md pre code { background: transparent; color: inherit; padding: 0; }
+.md blockquote {
+  border-left: 3px solid #cbd5e1;
+  padding-left: 0.9em;
+  margin: 0.6em 0;
+  color: #475569;
+  background: #f8fafc;
+  border-radius: 0 6px 6px 0;
+}
+.md hr { border: 0; border-top: 1px solid #e2e8f0; margin: 1em 0; }
+.md a { color: #2563eb; text-decoration: underline; text-underline-offset: 2px; }
+.md table {
+  border-collapse: collapse;
+  margin: 0.7em 0;
+  width: 100%;
+  font-size: 0.9em;
+}
+.md th, .md td {
+  border: 1px solid #e2e8f0;
+  padding: 0.4em 0.7em;
+  text-align: left;
+}
+.md th { background: #f8fafc; font-weight: 600; }
+
+/* Pipeline / timeline connector line utility */
+.timeline-line {
+  background: linear-gradient(to bottom, #e2e8f0, #cbd5e1);
+}

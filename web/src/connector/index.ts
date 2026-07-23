@@ -1,0 +1,45 @@
+/**
+ * Connector layer: the ONLY place that touches the network, browser storage,
+ * or holds mutable global state.
+ */
+export type {
+  UploadedDoc,
+  SpecialistSnapshot,
+  StageTeamSnapshot,
+  GenerationSettings,
+  ClarifyQuestion,
+  ClarifyAnswer,
+  RefinementRound,
+  RefinedIdea,
+  StageRoundDraft,
+  StageRound,
+  DocumentArtifact,
+  SessionStatus,
+  ArchitectureSession,
+  HistorySummary,
+  SdkModel,
+  SdkModelParameterDefinition,
+  SessionEvent,
+} from "./types";
+export * from "./personas";
+export {
+  loadSpecialists,
+  saveSpecialists,
+  resetSpecialists,
+  loadGenerationSettings,
+  saveGenerationSettings,
+  resetGenerationSettings,
+  type SpecialistsSettings,
+} from "./settings";
+export { api, type HealthResponse } from "./api";
+export {
+  useStore,
+  applyEvent,
+  personaToSnapshot,
+  teamsToSnapshot,
+  initialLive,
+  type Tab,
+  type LiveState,
+  type StoreState,
+} from "./store";
+export * from "./hooks";
