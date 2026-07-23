@@ -107,7 +107,7 @@ export function SpecialistsPage() {
     <div className="max-w-[1200px] mx-auto space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl text-slate-900">Specialists</h1>
+          <h1 className="font-display text-3xl text-slate-900">My Team</h1>
           <p className="text-slate-600 mt-1">
             Configure your intake analyst and each specialist department. Every artifact is
             produced by a department of {KIND_MIN_MEMBERS.market}–4 specialists who debate

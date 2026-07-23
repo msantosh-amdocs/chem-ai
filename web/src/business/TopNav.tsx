@@ -6,7 +6,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "refine", label: "Refine" },
   { id: "pipeline", label: "Pipeline" },
   { id: "docs", label: "Documents" },
-  { id: "specialists", label: "Specialists" },
+  { id: "specialists", label: "My Team" },
   { id: "history", label: "History" },
 ];
 

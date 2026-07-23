@@ -117,7 +117,7 @@ Stop with `Ctrl+C` or `./stop.sh`.
   with per-round agreement bars and the DAG.
 - **Documents** — final artifacts, one tab per document, plus a
   collapsible drill-down into every debate round.
-- **Specialists** — configure departments (2-4 members each; Procedure 2-5) and the
+- **My Team** — configure departments (2-4 members each; Procedure 2-5) and the
   debate settings (agreement threshold + max rounds).
 - **History** — every past session with its full artifact pack and how
   each department terminated (converged vs. max rounds).

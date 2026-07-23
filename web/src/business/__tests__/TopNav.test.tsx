@@ -21,7 +21,7 @@ describe("<TopNav>", () => {
       "Refine",
       "Pipeline",
       "Documents",
-      "Specialists",
+      "My Team",
       "History",
     ]) {
       expect(screen.getByRole("button", { name: new RegExp(`^${label}`) })).toBeInTheDocument();

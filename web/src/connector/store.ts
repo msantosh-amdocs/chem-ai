@@ -465,7 +465,7 @@ export const useStore = create<StoreState>((set, get) => ({
         set({
           live: {
             ...initialLive,
-            error: `${t.kind.toUpperCase()} team has ${t.members.length} member(s) — minimum is ${KIND_MIN_MEMBERS[t.kind]}. Add a specialist in the Specialists tab.`,
+            error: `${t.kind.toUpperCase()} team has ${t.members.length} member(s) — minimum is ${KIND_MIN_MEMBERS[t.kind]}. Add a specialist in the My Team tab.`,
           },
         });
         return;
