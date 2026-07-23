@@ -29,10 +29,11 @@ research pack.
    - **Market Analysis (3)** — Ananya (lead) + Karthik + Meera →
      *B2B Market Analysis*: TAM/SAM/SOM, buyer segments, top 5 geos,
      competitors, pricing reference, Go / Conditional / Not-Recommended verdict.
-   - **Procedure (4)** — Dr. Prakash (lead) + Sneha + Ravi + Aditi →
-     *Procedure & Route of Synthesis*: chosen route, reaction scheme
-     (Mermaid), step-by-step conditions (T / P / moles / yield), material
-     balance, lab-scale + industrial-scale configuration, hazards & EHS
+   - **Procedure (5)** — Dr. Prakash (lead) + Sneha + Ravi + Aditi +
+     Dr. Nikhil → *Procedure & Route of Synthesis*: chosen route, reaction
+     scheme (Mermaid), step-by-step conditions (T / P / moles / yield),
+     material balance, lab-scale + industrial-scale configuration, organic-
+     chemistry mechanism / stereochemistry / impurity review, hazards & EHS
      register, waste/effluent plan.
    - **Procurement (3)** — Vikram (lead) + Rohit + Priya → *Procurement Plan*:
      Equipment BOM + Raw Material BOM (India + international vendors,
@@ -74,14 +75,15 @@ Every specialist is fully configurable — name, model, tone, role
 description, model parameters, avatar, accent — and persisted to your
 browser's localStorage. Add or remove department members freely, as long
 as the per-department min/max are respected (**min 2, max 4 per
-department**).
+department; Procedure is capped at 5 to accommodate a dedicated organic-
+chemistry expert**).
 
 ## Defaults
 
 - **India-first**: INR ₹ (with USD reference), Indian regulatory regime
   (BIS, PESO, CPCB, DCGI-CDSCO), IP jurisdictions include India + US +
   EU + WIPO. Any of these can be overridden by the Analyst per session.
-- **Generic Procedure department**: the same 4 specialists adapt to
+- **Generic Procedure department**: the same 5 specialists adapt to
   chemical / pharma / semiconductor from the Refined Concept — they
   don't need a per-industry configuration.
 - **B2B only**: Market Analysis is strictly B2B (formulators, OEMs,
@@ -115,7 +117,7 @@ Stop with `Ctrl+C` or `./stop.sh`.
   with per-round agreement bars and the DAG.
 - **Documents** — final artifacts, one tab per document, plus a
   collapsible drill-down into every debate round.
-- **Specialists** — configure departments (2-4 members each) and the
+- **Specialists** — configure departments (2-4 members each; Procedure 2-5) and the
   debate settings (agreement threshold + max rounds).
 - **History** — every past session with its full artifact pack and how
   each department terminated (converged vs. max rounds).

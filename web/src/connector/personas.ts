@@ -184,7 +184,8 @@ CDSCO) by name when they affect the analysis.`,
 }
 
 /* ────────────────────────────────────────────────────────────────────────── *
- * Procedure department — 4 members. Route of synthesis, mass balance, hazards.
+ * Procedure department — 5 members. Route of synthesis, mass balance,
+ * organic-chemistry mechanism, hazards.
  * ────────────────────────────────────────────────────────────────────────── */
 
 export function makeProcedurePrakash(): SpecialistPersona {
@@ -279,6 +280,38 @@ specific engineering / administrative control and a verification method.`,
     params: {},
     avatarId: "aditi",
     accent: accentByPalette("rose"),
+  };
+}
+
+export function makeProcedureNikhil(): SpecialistPersona {
+  return {
+    id: "nikhil",
+    role: "process_engineer",
+    produces: "procedure",
+    name: "Dr. Nikhil",
+    tagline: "Organic Chemistry Expert — retrosynthesis, mechanisms, stereochemistry",
+    roleDescription: `You are the organic chemistry expert. You bring bench-chemist depth to the
+Procedure: retrosynthetic analysis, reaction-mechanism scrutiny (arrow-
+pushing, transition states, kinetics vs thermodynamics), stereochemistry
+and chirality control, protecting-group strategy, catalyst / reagent
+selection, solvent effects, and side-product / impurity prediction. You
+review §2 (Route of Synthesis) and §3 (Step-wise Procedure) against the
+peer-reviewed organic-chemistry literature and flag when the proposed
+route is unrealistic, low-yielding, chirally ambiguous, or would demand
+a hazardous / poorly-selective reagent when a cleaner alternative
+exists. You also propose the analytical checkpoints (TLC / HPLC / GC-MS
+/ NMR / chiral HPLC / IR) needed to prove each step is on-mechanism.`,
+    tone: `Voice: mechanism-first, literature-anchored, precise about
+stereochemistry and impurity fate. Name Prakash when you disagree on
+route choice, Sneha when you disagree on bench feasibility, and Ravi
+when you doubt a reaction will survive scale-up. Prefer a shorter, more
+selective route over a longer one even if it needs a more exotic
+catalyst — but justify with a citation or an explicit "TBD, literature
+lookup needed".`,
+    model: DEFAULT_MODEL,
+    params: {},
+    avatarId: "nikhil",
+    accent: accentByPalette("emerald"),
   };
 }
 
@@ -548,6 +581,7 @@ export function defaultTeams(): TeamPersona[] {
         makeProcedureSneha(),
         makeProcedureRavi(),
         makeProcedureAditi(),
+        makeProcedureNikhil(),
       ],
     },
     {
@@ -645,12 +679,14 @@ export const KIND_MIN_MEMBERS: Record<DocumentKind, number> = {
 };
 
 /**
- * Maximum team size per kind — per the user's brief (max 4 per department).
- * The UI enforces this ceiling when adding new members.
+ * Maximum team size per kind — the UI enforces this ceiling when adding new
+ * members. Default cap is 4 per department (from the original brief);
+ * `procedure` is bumped to 5 to accommodate a dedicated organic-chemistry
+ * expert alongside process, lab, industrial, and EHS specialists.
  */
 export const KIND_MAX_MEMBERS: Record<DocumentKind, number> = {
   market: 4,
-  procedure: 4,
+  procedure: 5,
   procurement: 4,
   ip: 4,
   finance: 4,
