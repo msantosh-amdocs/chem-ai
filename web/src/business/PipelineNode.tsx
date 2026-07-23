@@ -6,6 +6,7 @@ import type { PipelineNodeStatus } from "./pipeline";
 import { KIND_LABELS, KIND_SHORT, type DocumentKind } from "../connector/personas";
 import type {
   DocumentArtifact,
+  StageCost,
   StageTeamSnapshot,
 } from "../connector/types";
 
@@ -17,6 +18,12 @@ interface Props {
   maxRounds: number;
   activeMembers?: string[];
   error?: string;
+  /** Per-team token + USD rollup surfaced under the tile. */
+  cost?: StageCost;
+  /** Highlight when this tile's debate is expanded on the Pipeline page. */
+  selected?: boolean;
+  /** Called when the tile is clicked — parent decides what to reveal. */
+  onOpen?: () => void;
 }
 
 /**
@@ -30,6 +37,9 @@ export function PipelineNode({
   status,
   maxRounds,
   activeMembers,
+  cost,
+  selected,
+  onOpen,
 }: Props) {
   const label = KIND_LABELS[kind];
   const done = status === "done";
@@ -58,8 +68,28 @@ export function PipelineNode({
           ? "bg-amber-50 border-amber-300 shadow-pop"
           : "bg-white border-slate-200";
 
+  const clickable = !disabled && !!onOpen;
+  const Wrapper: "button" | "div" = clickable ? "button" : "div";
+
   return (
-    <div className={clsx("border-2 rounded-xl p-3 w-[260px] transition-all", bg)}>
+    <Wrapper
+      type={clickable ? "button" : undefined}
+      onClick={clickable ? onOpen : undefined}
+      aria-pressed={clickable ? !!selected : undefined}
+      title={
+        clickable
+          ? selected
+            ? `Close ${KIND_LABELS[kind]} debate`
+            : `Open ${KIND_LABELS[kind]} debate`
+          : undefined
+      }
+      className={clsx(
+        "border-2 rounded-xl p-3 w-[260px] transition-all text-left",
+        bg,
+        clickable && "hover:shadow-pop focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-slate-400",
+        selected && "ring-2 ring-indigo-500 ring-offset-1",
+      )}
+    >
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="min-w-0">
           <div className="font-semibold text-sm text-slate-900 truncate">
@@ -131,10 +161,27 @@ export function PipelineNode({
                   : "errored"}
             </div>
           )}
+          {cost && cost.llmCalls > 0 && (
+            <div className="mt-1 text-[10px] text-slate-500 flex items-baseline justify-between gap-1">
+              <span>est. cost</span>
+              <span className="font-mono text-slate-700">
+                ${cost.estimatedUsd.toFixed(cost.estimatedUsd < 1 ? 4 : 2)}
+                <span className="text-slate-400 font-normal">
+                  {" "}
+                  · {(cost.totalTokens / 1000).toFixed(1)}k tok
+                </span>
+              </span>
+            </div>
+          )}
+          {clickable && (
+            <div className="mt-1 text-[10px] text-slate-400">
+              {selected ? "▼ debate open" : "click to view debate →"}
+            </div>
+          )}
         </>
       ) : (
         <div className="text-xs text-slate-500 italic">team not configured</div>
       )}
-    </div>
+    </Wrapper>
   );
 }

@@ -7,6 +7,8 @@ import {
   type DocumentKind,
   type SessionStatus,
   type HistorySummary,
+  type SessionCosts,
+  type StageCost,
 } from "../connector";
 
 type ArtifactSummary = HistorySummary["artifacts"][number];
@@ -100,11 +102,24 @@ export function HistoryPage() {
                       <span>·</span>
                       <span>
                         Threshold {s.settings.threshold}%, max {s.settings.maxRounds} rounds
+                        {s.settings.terminationPolicy &&
+                          s.settings.terminationPolicy !== "threshold_or_max" && (
+                            <span className="text-slate-400">
+                              {" "}
+                              ({s.settings.terminationPolicy})
+                            </span>
+                          )}
                       </span>
                       <span>·</span>
                       <span>
                         {s.documents} document{s.documents === 1 ? "" : "s"}
                       </span>
+                      {s.costs && s.costs.total.llmCalls > 0 && (
+                        <>
+                          <span>·</span>
+                          <CostBadge costs={s.costs} />
+                        </>
+                      )}
                     </div>
                     <p className="text-sm text-slate-700 mt-2 line-clamp-2">{s.idea}</p>
                     <div className="flex items-center gap-2 mt-2 flex-wrap">
@@ -114,7 +129,11 @@ export function HistoryPage() {
                         </span>
                       ) : (
                         s.artifacts.map((a) => (
-                          <ArtifactChip key={a.kind} artifact={a} />
+                          <ArtifactChip
+                            key={a.kind}
+                            artifact={a}
+                            cost={s.costs?.perTeam?.[a.kind]}
+                          />
                         ))
                       )}
                     </div>
@@ -183,7 +202,13 @@ function StatusChip({ status }: { status: SessionStatus }) {
   );
 }
 
-function ArtifactChip({ artifact }: { artifact: ArtifactSummary }) {
+function ArtifactChip({
+  artifact,
+  cost,
+}: {
+  artifact: ArtifactSummary;
+  cost?: StageCost;
+}) {
   const { kind, hasContent, error, rounds, terminatedBy } = artifact;
   const style = error
     ? "bg-rose-50 text-rose-700 border-rose-200"
@@ -199,13 +224,24 @@ function ArtifactChip({ artifact }: { artifact: ArtifactSummary }) {
         ? ` · ✓ r${rounds}`
         : ` · r${rounds}/max`
       : "";
-  const title = error
-    ? error
-    : hasContent
-      ? terminatedBy === "agreement"
-        ? `Converged after ${rounds} round(s)`
-        : `Stopped at ${rounds} round(s) (max rounds)`
-      : "Not produced yet";
+  const costSuffix =
+    cost && cost.llmCalls > 0
+      ? ` · $${cost.estimatedUsd.toFixed(cost.estimatedUsd < 1 ? 4 : 2)}`
+      : "";
+  const title = [
+    error
+      ? error
+      : hasContent
+        ? terminatedBy === "agreement"
+          ? `Converged after ${rounds} round(s)`
+          : `Stopped at ${rounds} round(s) (max rounds)`
+        : "Not produced yet",
+    cost && cost.llmCalls > 0
+      ? `Estimated spend $${cost.estimatedUsd.toFixed(4)} across ${cost.llmCalls} call(s) · ${cost.totalTokens.toLocaleString()} tokens`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" — ");
   return (
     <span
       className={clsx(
@@ -216,6 +252,28 @@ function ArtifactChip({ artifact }: { artifact: ArtifactSummary }) {
     >
       {KIND_SHORT[kind]}
       {suffix}
+      {costSuffix}
+    </span>
+  );
+}
+
+function CostBadge({ costs }: { costs: SessionCosts }) {
+  const { estimatedUsd, totalTokens, llmCalls } = costs.total;
+  const partial = !costs.usageComplete;
+  return (
+    <span
+      className="text-slate-600"
+      title={
+        `Estimated total spend $${estimatedUsd.toFixed(4)} across ${llmCalls} LLM ` +
+        `call(s) · ${totalTokens.toLocaleString()} tokens` +
+        (partial ? " · some calls did not report usage; this is a lower bound" : "")
+      }
+    >
+      est.{" "}
+      <span className="font-mono text-slate-800">
+        ${estimatedUsd.toFixed(estimatedUsd < 1 ? 4 : 2)}
+      </span>
+      {partial && <span className="text-amber-600"> (partial)</span>}
     </span>
   );
 }

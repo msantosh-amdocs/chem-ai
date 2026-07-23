@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import clsx from "clsx";
 import { Markdown, Spinner, StatusPill } from "../sandbox";
 import {
@@ -16,12 +17,55 @@ import {
   type SpecialistSnapshot,
   type StageTeamSnapshot,
   type DocumentKind,
+  type StageCost,
 } from "../connector";
 
 export function PipelinePage() {
   const currentSession = useCurrentSession();
   const live = useLive();
   const { setTab, regenerate } = useConnectorActions();
+
+  // Which artifact's debate trail is currently expanded. Only one at a
+  // time — the user opens it explicitly by clicking a tile, which
+  // matches the "hide verbose by default" ask.
+  const [openKind, setOpenKind] = useState<DocumentKind | null>(null);
+
+  const teamByKind = useMemo(
+    () =>
+      new Map<DocumentKind, StageTeamSnapshot>(
+        (currentSession?.specialists.teams ?? []).map((t) => [t.kind, t]),
+      ),
+    [currentSession],
+  );
+  const artByKind = useMemo(
+    () =>
+      new Map<DocumentKind, DocumentArtifact>(
+        (currentSession?.artifacts ?? []).map((a) => [a.kind, a]),
+      ),
+    [currentSession],
+  );
+
+  // Progress computation — must be a hook, so it runs on every render
+  // regardless of whether currentSession is null. We just no-op if it is.
+  const progress = useMemo(() => {
+    if (!currentSession) return { pct: 0, done: 0, total: 0, running: 0, errored: 0 };
+    const teams = currentSession.specialists.teams;
+    const total = teams.length;
+    let done = 0;
+    let running = 0;
+    let errored = 0;
+    for (const t of teams) {
+      const a = artByKind.get(t.kind);
+      if (live.errors[t.kind]) errored++;
+      else if (live.done.has(t.kind) || (a?.content && !a.error)) done++;
+      else if (live.generating.has(t.kind)) running++;
+    }
+    // Give half credit for running artifacts so the bar visibly advances
+    // as soon as a wave starts, even before its first round completes.
+    const weighted = done + errored + running * 0.5;
+    const pct = total === 0 ? 0 : Math.min(100, Math.round((weighted / total) * 100));
+    return { pct, done, total, running, errored };
+  }, [currentSession, artByKind, live.done, live.generating, live.errors]);
 
   if (!currentSession) {
     return (
@@ -31,12 +75,13 @@ export function PipelinePage() {
     );
   }
 
-  const teamByKind = new Map<DocumentKind, StageTeamSnapshot>(
-    currentSession.specialists.teams.map((t) => [t.kind, t]),
-  );
-  const artByKind = new Map<DocumentKind, DocumentArtifact>(
-    currentSession.artifacts.map((a) => [a.kind, a]),
-  );
+  const costs = currentSession.costs;
+  const showProgress =
+    currentSession.status === "generating" ||
+    currentSession.status === "locked" ||
+    currentSession.status === "completed" ||
+    live.running ||
+    live.concepting;
 
   return (
     <div className="max-w-[1400px] mx-auto space-y-6">
@@ -44,9 +89,13 @@ export function PipelinePage() {
         <div>
           <h1 className="font-display text-3xl text-slate-900">Pipeline</h1>
           <p className="text-slate-600 mt-1">
-            Watch each specialist team debate the artifact until they reach{" "}
+            Each department debates its artifact until they reach{" "}
             <span className="font-semibold">{currentSession.settings.threshold}%</span>{" "}
-            agreement (or {currentSession.settings.maxRounds} rounds).
+            agreement
+            {currentSession.settings.terminationPolicy === "threshold_only"
+              ? " (no round cap)"
+              : ` (or ${currentSession.settings.maxRounds} rounds)`}
+            . Click any tile to open its debate trail.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -62,6 +111,20 @@ export function PipelinePage() {
           )}
         </div>
       </div>
+
+      {showProgress && (
+        <ProgressBar
+          pct={progress.pct}
+          done={progress.done}
+          running={progress.running}
+          errored={progress.errored}
+          total={progress.total}
+          status={currentSession.status}
+          totalUsd={costs?.total.estimatedUsd ?? 0}
+          totalCalls={costs?.total.llmCalls ?? 0}
+          usageComplete={costs?.usageComplete ?? true}
+        />
+      )}
 
       <ConceptCard />
 
@@ -97,6 +160,11 @@ export function PipelinePage() {
                           maxRounds={currentSession.settings.maxRounds}
                           activeMembers={live.activeMembers[kind]}
                           error={live.errors[kind]}
+                          cost={costs?.perTeam[kind]}
+                          selected={openKind === kind}
+                          onOpen={() =>
+                            setOpenKind((prev) => (prev === kind ? null : kind))
+                          }
                         />
                       );
                     })}
@@ -111,35 +179,138 @@ export function PipelinePage() {
         </div>
       </section>
 
+      {/*
+        Live debate is opt-in — a tile has to be clicked. This replaces the
+        old always-visible list of every stage's debate panel, which was
+        overwhelming while a run was in flight.
+      */}
       <section>
-        <h2 className="font-display text-xl text-slate-900 mb-3">Live debate</h2>
-        <div className="space-y-4">
-          {currentSession.artifacts.length === 0 && (
-            <div className="card p-6 text-center text-slate-500">
-              {live.concepting
-                ? "Writing the refined concept…"
-                : live.running
-                  ? "Kicking off the first wave…"
-                  : "Waiting on generation."}
-            </div>
+        <div className="flex items-baseline justify-between mb-3">
+          <h2 className="font-display text-xl text-slate-900">Live debate</h2>
+          {openKind && (
+            <button
+              className="text-xs text-slate-500 hover:text-slate-800 underline"
+              onClick={() => setOpenKind(null)}
+            >
+              Close debate view
+            </button>
           )}
-          {[...currentSession.artifacts]
-            .sort((a, b) => canonicalKindOrder(a.kind) - canonicalKindOrder(b.kind))
-            .map((a) => {
-              const team = teamByKind.get(a.kind);
-              return team ? (
-                <StageDebatePanel
-                  key={a.kind}
-                  artifact={a}
-                  team={team}
-                  activeMembers={live.activeMembers[a.kind]}
-                  threshold={currentSession.settings.threshold}
-                  error={a.error ?? live.errors[a.kind]}
-                />
-              ) : null;
-            })}
         </div>
+        {openKind ? (
+          (() => {
+            const artifact = artByKind.get(openKind);
+            const team = teamByKind.get(openKind);
+            if (!team) {
+              return (
+                <div className="card p-6 text-center text-slate-500">
+                  Team not configured.
+                </div>
+              );
+            }
+            if (!artifact) {
+              return (
+                <div className="card p-6 text-center text-slate-500">
+                  This department hasn't started yet. Debate will appear here once it does.
+                </div>
+              );
+            }
+            return (
+              <StageDebatePanel
+                artifact={artifact}
+                team={team}
+                activeMembers={live.activeMembers[openKind]}
+                threshold={currentSession.settings.threshold}
+                error={artifact.error ?? live.errors[openKind]}
+              />
+            );
+          })()
+        ) : currentSession.artifacts.length === 0 && !live.concepting && !live.running ? (
+          <div className="card p-6 text-center text-slate-500 text-sm">
+            Nothing running yet.
+          </div>
+        ) : (
+          <div className="card p-6 text-center text-slate-500 text-sm">
+            {[...currentSession.artifacts]
+              .sort((a, b) => canonicalKindOrder(a.kind) - canonicalKindOrder(b.kind))
+              .filter((a) => a.rounds.length || a.streaming || a.error)
+              .length > 0
+              ? "Click any tile above to expand its debate — verbose output is hidden by default."
+              : live.concepting
+                ? "Writing the refined concept…"
+                : "Waiting on the first wave to kick off."}
+          </div>
+        )}
       </section>
+    </div>
+  );
+}
+
+function ProgressBar({
+  pct,
+  done,
+  running,
+  errored,
+  total,
+  status,
+  totalUsd,
+  totalCalls,
+  usageComplete,
+}: {
+  pct: number;
+  done: number;
+  running: number;
+  errored: number;
+  total: number;
+  status: string;
+  totalUsd: number;
+  totalCalls: number;
+  usageComplete: boolean;
+}) {
+  const bar =
+    status === "completed"
+      ? "bg-emerald-500"
+      : errored > 0
+        ? "bg-amber-500"
+        : "bg-indigo-500";
+  return (
+    <div className="card p-4">
+      <div className="flex items-baseline justify-between mb-2 gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-semibold text-slate-800">
+            {status === "completed"
+              ? "Pipeline complete"
+              : status === "generating"
+                ? "Generating artifacts…"
+                : status === "locked"
+                  ? "Warming up…"
+                  : "Running"}
+          </span>
+          <span className="text-xs text-slate-500">
+            {done}/{total} done
+            {running > 0 && ` · ${running} in flight`}
+            {errored > 0 && ` · ${errored} errored`}
+          </span>
+        </div>
+        <div className="text-xs text-slate-600 flex items-center gap-3">
+          <span className="font-mono">{pct}%</span>
+          {totalCalls > 0 && (
+            <span className="text-slate-500">
+              est. spend{" "}
+              <span className="font-mono text-slate-800">
+                ${totalUsd.toFixed(totalUsd < 1 ? 4 : 2)}
+              </span>{" "}
+              across {totalCalls} call{totalCalls === 1 ? "" : "s"}
+              {!usageComplete && " (partial)"}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="h-2 rounded bg-slate-200 overflow-hidden">
+        <div
+          className={clsx("h-full rounded transition-all", bar)}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }
@@ -241,7 +412,6 @@ function StageDebatePanel({
                 artifact={artifact}
                 team={team}
                 threshold={threshold}
-                collapsible
                 activeMembers={activeMembers}
               />
             </div>
@@ -271,3 +441,6 @@ function StageDebatePanel({
     </div>
   );
 }
+
+// Re-export so the type is available for downstream callers if needed.
+export type { StageCost };

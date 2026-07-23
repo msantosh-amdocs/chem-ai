@@ -65,6 +65,13 @@ export function RefinePage() {
   const analyst = currentSession.specialists.analyst;
   const busy = live.refining || live.concepting;
   const readyForLock = latest && latest.completeness >= 85;
+  // Once the user locks the idea, the session leaves the `refining` status
+  // and moves through `locked` → `generating` → `completed`. From that
+  // point on, further Q&A rounds are meaningless (the server has already
+  // frozen the Refined Concept and dispatched departments), so we hide the
+  // "Submit answers" and "Lock idea" controls entirely instead of showing
+  // disabled buttons that mislead users into thinking they can still edit.
+  const isRefiningStage = currentSession.status === "refining";
 
   return (
     <div className="max-w-[1200px] mx-auto space-y-6">
@@ -148,7 +155,7 @@ export function RefinePage() {
                     idx={idx + 1}
                     value={draftAnswers[q.id] ?? ""}
                     onChange={(v) => setDraftAnswer(q.id, v)}
-                    disabled={busy}
+                    disabled={busy || !isRefiningStage}
                   />
                 ))}
               </div>
@@ -173,46 +180,65 @@ export function RefinePage() {
         </div>
       )}
 
-      <div className="sticky bottom-4 z-10">
-        <div className="card p-3 flex items-center gap-3 shadow-pop">
-          <div className="flex-1 text-sm text-slate-600">
-            {readyForLock ? (
-              <span className="text-emerald-700 font-medium">
-                Completeness {latest!.completeness}% — the idea is ready. You can lock it now,
-                or answer more questions to raise quality further.
-              </span>
-            ) : latest ? (
-              <span>
-                Completeness <span className="font-medium">{latest.completeness}%</span>.{" "}
-                {highUnanswered > 0
-                  ? `${highUnanswered} high-priority question${highUnanswered === 1 ? "" : "s"} still unanswered.`
-                  : "Submit your answers to run the next round."}
-              </span>
-            ) : (
-              <span>Waiting for the first round of questions…</span>
-            )}
+      {isRefiningStage ? (
+        <div className="sticky bottom-4 z-10">
+          <div className="card p-3 flex items-center gap-3 shadow-pop">
+            <div className="flex-1 text-sm text-slate-600">
+              {readyForLock ? (
+                <span className="text-emerald-700 font-medium">
+                  Completeness {latest!.completeness}% — the idea is ready. You can lock it now,
+                  or answer more questions to raise quality further.
+                </span>
+              ) : latest ? (
+                <span>
+                  Completeness <span className="font-medium">{latest.completeness}%</span>.{" "}
+                  {highUnanswered > 0
+                    ? `${highUnanswered} high-priority question${highUnanswered === 1 ? "" : "s"} still unanswered.`
+                    : "Submit your answers to run the next round."}
+                </span>
+              ) : (
+                <span>Waiting for the first round of questions…</span>
+              )}
+            </div>
+            <button
+              className="btn btn-ghost"
+              onClick={submitRefinement}
+              disabled={busy || !latest || latest.questions.length === 0}
+            >
+              {live.refining ? "Refining…" : "Submit answers → next round"}
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={lockIdea}
+              disabled={busy || !latest}
+              title={
+                readyForLock
+                  ? "Lock the idea and generate the artifact pack"
+                  : "You can lock the idea at any completeness — but low scores yield weaker artifacts"
+              }
+            >
+              {live.concepting ? "Locking…" : "Lock idea & generate →"}
+            </button>
           </div>
-          <button
-            className="btn btn-ghost"
-            onClick={submitRefinement}
-            disabled={busy || !latest || latest.questions.length === 0}
-          >
-            {live.refining ? "Refining…" : "Submit answers → next round"}
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={lockIdea}
-            disabled={busy || !latest}
-            title={
-              readyForLock
-                ? "Lock the idea and generate the artifact pack"
-                : "You can lock the idea at any completeness — but low scores yield weaker artifacts"
-            }
-          >
-            {live.concepting ? "Locking…" : "Lock idea & generate →"}
-          </button>
         </div>
-      </div>
+      ) : (
+        // Locked / generating / completed: the idea is frozen, so we replace
+        // the action bar with a read-only banner pointing to Pipeline.
+        <div className="sticky bottom-4 z-10">
+          <div className="card p-3 flex items-center gap-3 shadow-pop bg-indigo-50 border-indigo-200">
+            <div className="flex-1 text-sm text-indigo-900">
+              This idea has been locked and handed to the specialist teams. Refinement
+              answers are read-only from here.
+            </div>
+            <button
+              className="btn btn-primary"
+              onClick={() => useStore.setState({ tab: "pipeline" })}
+            >
+              Watch the pipeline →
+            </button>
+          </div>
+        </div>
+      )}
 
       {rounds.length > 1 && (
         <section>
