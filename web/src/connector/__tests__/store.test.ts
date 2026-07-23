@@ -18,7 +18,11 @@ function baseSession(): ArchitectureSession {
     createdAt: "",
     updatedAt: "",
     status: "refining",
-    settings: { threshold: 95, maxRounds: 4 },
+    settings: {
+      threshold: 95,
+      maxRounds: 4,
+      terminationPolicy: "threshold_or_max",
+    },
     specialists: {
       analyst: personaToSnapshot(defaultAnalyst()),
       teams: teamsToSnapshot(defaultTeams()),

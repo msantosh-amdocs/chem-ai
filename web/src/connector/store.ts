@@ -28,7 +28,15 @@ import {
   type SpecialistPersona,
 } from "./personas";
 
-export type Tab = "new" | "refine" | "pipeline" | "docs" | "specialists" | "history" | "help";
+export type Tab =
+  | "new"
+  | "refine"
+  | "pipeline"
+  | "docs"
+  | "specialists"
+  | "settings"
+  | "history"
+  | "help";
 
 export interface LiveState {
   running: boolean;

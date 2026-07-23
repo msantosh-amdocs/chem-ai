@@ -26,6 +26,8 @@ describe("loadGenerationSettings", () => {
     const s = loadGenerationSettings();
     expect(s.threshold).toBe(100);
     expect(s.maxRounds).toBe(2);
+    // Missing terminationPolicy → falls back to default.
+    expect(s.terminationPolicy).toBe("threshold_or_max");
   });
 
   it("survives malformed JSON by returning defaults", () => {
@@ -33,13 +35,33 @@ describe("loadGenerationSettings", () => {
     expect(loadGenerationSettings()).toEqual(DEFAULT_GENERATION_SETTINGS);
   });
 
-  it("round-trips saved values", () => {
-    saveGenerationSettings({ threshold: 80, maxRounds: 5 });
-    expect(loadGenerationSettings()).toEqual({ threshold: 80, maxRounds: 5 });
+  it("round-trips saved values (including termination policy)", () => {
+    saveGenerationSettings({
+      threshold: 80,
+      maxRounds: 5,
+      terminationPolicy: "threshold_only",
+    });
+    expect(loadGenerationSettings()).toEqual({
+      threshold: 80,
+      maxRounds: 5,
+      terminationPolicy: "threshold_only",
+    });
+  });
+
+  it("falls back to default terminationPolicy when a bogus value is stored", () => {
+    localStorage.setItem(
+      "mr.settings.v1",
+      JSON.stringify({ threshold: 90, maxRounds: 4, terminationPolicy: "banana" }),
+    );
+    expect(loadGenerationSettings().terminationPolicy).toBe("threshold_or_max");
   });
 
   it("resets to defaults on reset", () => {
-    saveGenerationSettings({ threshold: 80, maxRounds: 5 });
+    saveGenerationSettings({
+      threshold: 80,
+      maxRounds: 5,
+      terminationPolicy: "max_only",
+    });
     const s = resetGenerationSettings();
     expect(s).toEqual(DEFAULT_GENERATION_SETTINGS);
     expect(localStorage.getItem("mr.settings.v1")).toBeNull();

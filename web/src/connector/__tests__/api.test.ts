@@ -67,7 +67,11 @@ describe("connector/api", () => {
         analyst: { name: "A" } as never,
         teams: [{ kind: "market", minMembers: 2, members: [] } as never],
       },
-      settings: { threshold: 90, maxRounds: 3 },
+      settings: {
+        threshold: 90,
+        maxRounds: 3,
+        terminationPolicy: "threshold_or_max",
+      },
       documents: [],
     });
     const [url, init] = fetchMock.mock.calls[0]!;
@@ -78,6 +82,7 @@ describe("connector/api", () => {
     expect(JSON.parse(fd.get("settings") as string)).toEqual({
       threshold: 90,
       maxRounds: 3,
+      terminationPolicy: "threshold_or_max",
     });
     expect(JSON.parse(fd.get("specialists") as string).analyst.name).toBe("A");
   });

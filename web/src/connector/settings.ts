@@ -17,9 +17,15 @@ export interface SpecialistsSettings {
   teams: TeamPersona[];
 }
 
+export type TerminationPolicy =
+  | "threshold_or_max"
+  | "threshold_only"
+  | "max_only";
+
 export interface GenerationSettings {
   threshold: number;
   maxRounds: number;
+  terminationPolicy: TerminationPolicy;
 }
 
 function defaultSpecialists(): SpecialistsSettings {
@@ -64,14 +70,28 @@ export function resetSpecialists(): SpecialistsSettings {
   return defaultSpecialists();
 }
 
+const VALID_POLICIES: TerminationPolicy[] = [
+  "threshold_or_max",
+  "threshold_only",
+  "max_only",
+];
+
 export function loadGenerationSettings(): GenerationSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return { ...DEFAULT_GENERATION_SETTINGS };
     const parsed = JSON.parse(raw) as Partial<GenerationSettings>;
+    // maxRounds got a bigger upper bound (2..8) when we added the
+    // threshold_only policy — headroom for teams that want a deeper debate.
+    // Legacy settings saved with the older 2..6 cap still deserialize fine.
     return {
       threshold: clamp(parsed.threshold, 50, 100, DEFAULT_GENERATION_SETTINGS.threshold),
-      maxRounds: clamp(parsed.maxRounds, 2, 6, DEFAULT_GENERATION_SETTINGS.maxRounds),
+      maxRounds: clamp(parsed.maxRounds, 2, 8, DEFAULT_GENERATION_SETTINGS.maxRounds),
+      terminationPolicy: VALID_POLICIES.includes(
+        parsed.terminationPolicy as TerminationPolicy,
+      )
+        ? (parsed.terminationPolicy as TerminationPolicy)
+        : DEFAULT_GENERATION_SETTINGS.terminationPolicy,
     };
   } catch {
     return { ...DEFAULT_GENERATION_SETTINGS };

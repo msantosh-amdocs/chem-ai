@@ -4,7 +4,6 @@ import { SpecialistEditor, SpecialistAvatar } from "../business";
 import {
   useSpecialists,
   useModels,
-  useGenSettings,
   useConnectorActions,
   useStore,
   KIND_LABELS,
@@ -32,7 +31,6 @@ type Selection =
 export function SpecialistsPage() {
   const specialists = useSpecialists();
   const { models, modelsLoading, modelsError } = useModels();
-  const genSettings = useGenSettings();
   const {
     loadModels,
     updateAnalyst,
@@ -40,8 +38,6 @@ export function SpecialistsPage() {
     addMember,
     removeMember,
     resetSpecialists,
-    updateGenSettings,
-    resetGenSettings,
   } = useConnectorActions();
 
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -146,60 +142,10 @@ export function SpecialistsPage() {
         </div>
       )}
 
-      <section className="card p-5">
-        <div className="flex items-baseline justify-between mb-4">
-          <div>
-            <h2 className="font-display text-xl text-slate-900">Debate settings</h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Applied to every stage. Debate stops as soon as every member's self-scored
-              agreement hits the threshold, or the max rounds cap is reached.
-            </p>
-          </div>
-          <button
-            className="text-xs text-slate-500 hover:text-slate-800 underline"
-            onClick={resetGenSettings}
-          >
-            Reset
-          </button>
-        </div>
-        <div className="grid grid-cols-2 gap-6">
-          <div>
-            <label className="block text-xs font-medium uppercase tracking-wider text-slate-500 mb-1">
-              Agreement threshold ({genSettings.threshold}%)
-            </label>
-            <input
-              type="range"
-              min={50}
-              max={100}
-              step={1}
-              value={genSettings.threshold}
-              onChange={(e) => updateGenSettings({ threshold: Number(e.target.value) })}
-              className="w-full accent-indigo-600"
-            />
-            <p className="text-[11px] text-slate-500 mt-1">
-              How aligned members must be before the team moves on. Default 95%.
-            </p>
-          </div>
-          <div>
-            <label className="block text-xs font-medium uppercase tracking-wider text-slate-500 mb-1">
-              Max rounds ({genSettings.maxRounds})
-            </label>
-            <input
-              type="range"
-              min={2}
-              max={6}
-              step={1}
-              value={genSettings.maxRounds}
-              onChange={(e) => updateGenSettings({ maxRounds: Number(e.target.value) })}
-              className="w-full accent-indigo-600"
-            />
-            <p className="text-[11px] text-slate-500 mt-1">
-              Debate hard-stops after this many rounds even if agreement is below the
-              threshold. Default 4.
-            </p>
-          </div>
-        </div>
-      </section>
+      <div className="text-xs text-slate-500 -mt-3">
+        Looking for the agreement threshold, max rounds, or termination policy?
+        They moved to the <span className="font-medium text-slate-700">Settings</span> tab.
+      </div>
 
       <section>
         <div className="flex items-baseline justify-between mb-3">

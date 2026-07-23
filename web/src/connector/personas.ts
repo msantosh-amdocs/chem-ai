@@ -693,4 +693,8 @@ export const KIND_MAX_MEMBERS: Record<DocumentKind, number> = {
   presentation: 4,
 };
 
-export const DEFAULT_GENERATION_SETTINGS = { threshold: 95, maxRounds: 4 };
+export const DEFAULT_GENERATION_SETTINGS = {
+  threshold: 95,
+  maxRounds: 4,
+  terminationPolicy: "threshold_or_max" as const,
+};

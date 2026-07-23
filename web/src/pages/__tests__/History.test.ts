@@ -14,7 +14,12 @@ function makeSummary(overrides: Partial<HistorySummary> = {}): HistorySummary {
     completeness: 90,
     documents: 0,
     hasRefinedIdea: true,
-    settings: { threshold: 95, maxRounds: 4 },
+    settings: {
+      threshold: 95,
+      maxRounds: 4,
+      terminationPolicy: "threshold_or_max",
+    },
+    costs: null,
     analyst: { id: "aarav", name: "Aarav", model: "gpt-4" },
     teams: [],
     artifacts: [

@@ -12,6 +12,7 @@ import { RefinePage } from "./pages/Refine";
 import { PipelinePage } from "./pages/Pipeline";
 import { DocumentsPage } from "./pages/Documents";
 import { SpecialistsPage } from "./pages/Specialists";
+import { SettingsPage } from "./pages/Settings";
 import { HistoryPage } from "./pages/History";
 import { HowItWorksPage } from "./pages/HowItWorks";
 
@@ -45,6 +46,7 @@ export default function App() {
         {tab === "pipeline" && <PipelinePage />}
         {tab === "docs" && <DocumentsPage />}
         {tab === "specialists" && <SpecialistsPage />}
+        {tab === "settings" && <SettingsPage />}
         {tab === "history" && <HistoryPage />}
         {tab === "help" && <HowItWorksPage />}
       </main>

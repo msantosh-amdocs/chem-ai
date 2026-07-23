@@ -14,7 +14,7 @@ const baseProps = {
 };
 
 describe("<TopNav>", () => {
-  it("renders all seven tabs", () => {
+  it("renders all eight tabs", () => {
     render(<TopNav {...baseProps} />);
     for (const label of [
       "New Idea",
@@ -22,11 +22,17 @@ describe("<TopNav>", () => {
       "Pipeline",
       "Documents",
       "My Team",
+      "Settings",
       "History",
       "How it works",
     ]) {
       expect(screen.getByRole("button", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
+  });
+
+  it("keeps Settings always enabled regardless of session state", () => {
+    render(<TopNav {...baseProps} hasSession={false} hasRefinedIdea={false} />);
+    expect(screen.getByRole("button", { name: /^Settings/ })).toBeEnabled();
   });
 
   it("keeps How it works always enabled regardless of session state", () => {
