@@ -1,0 +1,36 @@
+Fabless design + turnkey manufacture of an 8-bit, 4-channel simultaneous-
+sampling analog-to-digital converter (ADC, 1 MSPS, +/-0.5 LSB INL, die
+3.5 x 4.2 mm, QFN-32 package) plus a matching 3.3V LDO regulator (500 mA,
+70 dB PSRR) on the same 180nm BCD (bipolar-CMOS-DMOS) analog process
+node. Both targeted at industrial IoT sensor front-ends and EV BMS.
+
+Industry: semiconductor, analog/mixed-signal IC design (fabless phase 1;
+fab-in-a-box ambition phase 2).
+Scale: 25,000 200mm wafers/year yielding ~5M IC units/year at 82% wafer-
+sort yield; 200 design tape-outs/year in phase 2.
+Geography: design center Bengaluru (Karnataka, greenfield); wafer fab at
+TSMC Taiwan phase 1 -> Tata Electronics Dholera phase 2 (2029); OSAT at
+ASE Malaysia phase 1 -> CG Power-Renesas Sanand (2028). Markets = Indian
+OEMs 40% (Tata Motors EV BMS, L&T, BEL), Southeast Asia 35%, US
+automotive tier-1 25%.
+
+CAPEX: INR 520 Cr under India Semiconductor Mission (ISM) DLI scheme;
+ISM-approved INR 150 Cr capex subsidy (50% of eligible capex up to INR
+300 Cr). Timeline: design center Nov 2025, first tape-out Feb 2026,
+engineering samples Jul 2026, qualification samples Dec 2026, commercial
+revenue Q2 2027, IATF 16949 certification Q4 2027.
+
+Regulatory posture: ISM DLI + DPS-C schemes (MeitY), AEC-Q100 Grade 1,
+JEDEC JESD22 reliability, RoHS + REACH, IATF 16949 (automotive), Wassenaar
+ECCN clearance for US/EU customers, Bengaluru KSPCB CTE/CTO for the
+photolithography + wet-etch lab.
+
+Constraints: 8 senior analog IC designers ex-TI-Bengaluru (60 combined
+years experience); Cadence Virtuoso + Synopsys HSPICE + Mentor Calibre
+seats in place; IIT-Madras reliability-testing MoU; pre-committed offtake
+of 800,000 units/year to Tata Motors for EV BMS; own Indian patents
+IN567890 (calibration) and IN567891 (LDO architecture). Risks: (1) TSMC
+180nm long-term-supply agreement not yet signed (waitlist); (2) senior-
+designer poaching at ~INR 1.2 Cr/yr benchmark; (3) ISM subsidy
+disbursement lag; (4) design-around risk from Analog Devices (external
+FTO by Anand & Anand currently clean).

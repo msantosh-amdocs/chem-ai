@@ -1,0 +1,32 @@
+Manufacture Empagliflozin (SGLT2 inhibitor, T2 diabetes; CAS 864070-44-0,
+C23H27ClO7) as an active pharmaceutical ingredient at >=99.7% purity to
+USP grade under ICH Q7 cGMP. Brownfield expansion at Visakhapatnam SEZ
+(VSEZ), Andhra Pradesh, on our owned 12-acre parcel adjacent to the
+existing block.
+
+Industry: pharmaceutical, small-molecule bulk-drug API.
+Scale: 40 t/yr at launch, scaling to 90 t/yr by year 3. Batch process,
+8 batches/month at 500 kg/batch initially. Existing block has qualified
+reactor train (2 x 3-KL glass-lined, 2 x 6-KL SS316L) and utilities.
+
+Geography: markets = India 30%, EU 35% (Germany + Spain), US 20% via
+DMF Type II, Brazil ANVISA 15%.
+
+CAPEX: INR 340 Cr including QC lab, warehousing, and utilities upgrade;
+INR 95 Cr working capital. Timeline: DMF filing Aug 2026, pre-approval
+inspection Mar 2027, India commercial launch Oct 2027 (aligned with
+Jardiance patent expiry India Jan 2028), EDQM CEP filing Q4 2027.
+
+Regulatory posture: CDSCO/DCGI manufacturing licence, USFDA DMF Type II
++ on-site inspection (target zero 483s), EDQM CEP for Europe, ANVISA for
+Brazil, WHO-GMP + PIC/S alignment, ICH Q7 + ICH Q3D elemental impurities,
+Schedule M (2023 revision), APPCB CTE+CTO.
+
+Constraints: DMF Type II route in-house from prior CRO work (Piramal);
+D-mannose starting material contracted with Roquette India at INR 190/kg
+landed; captive production of the key intermediate 4-(beta-D-
+glucopyranos-1-yl)-benzene. Risks: (1) 22 competitor ANDAs filed in US
+against Jardiance; (2) Boehringer Ingelheim has 3 secondary process
+patents in India to design around; (3) FDA inspection risk given 2024
+warning letter to a peer facility in the same corridor; (4) D-mannose
+single-sourcing.
