@@ -14,7 +14,7 @@ const baseProps = {
 };
 
 describe("<TopNav>", () => {
-  it("renders all six tabs", () => {
+  it("renders all seven tabs", () => {
     render(<TopNav {...baseProps} />);
     for (const label of [
       "New Idea",
@@ -23,9 +23,15 @@ describe("<TopNav>", () => {
       "Documents",
       "My Team",
       "History",
+      "How it works",
     ]) {
       expect(screen.getByRole("button", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
+  });
+
+  it("keeps How it works always enabled regardless of session state", () => {
+    render(<TopNav {...baseProps} hasSession={false} hasRefinedIdea={false} />);
+    expect(screen.getByRole("button", { name: /^How it works/ })).toBeEnabled();
   });
 
   it("disables Refine/Pipeline until a session exists and Documents until refined", () => {

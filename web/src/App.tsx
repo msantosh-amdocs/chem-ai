@@ -13,6 +13,7 @@ import { PipelinePage } from "./pages/Pipeline";
 import { DocumentsPage } from "./pages/Documents";
 import { SpecialistsPage } from "./pages/Specialists";
 import { HistoryPage } from "./pages/History";
+import { HowItWorksPage } from "./pages/HowItWorks";
 
 export default function App() {
   const tab = useTab();
@@ -45,6 +46,7 @@ export default function App() {
         {tab === "docs" && <DocumentsPage />}
         {tab === "specialists" && <SpecialistsPage />}
         {tab === "history" && <HistoryPage />}
+        {tab === "help" && <HowItWorksPage />}
       </main>
       <footer className="text-center text-xs text-slate-500 py-4">
         Chem AI · local, private, Cursor SDK-powered
