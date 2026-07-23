@@ -325,8 +325,25 @@ RULES
    ### 2.2 Alternative Routes Considered (1-2, with reason rejected)
    ### 2.3 Chemical Reaction Scheme
        Provide the reaction scheme as text (arrow notation) AND as a
-       Mermaid \`graph LR\` diagram inside a \`\`\`mermaid code block —
-       one node per intermediate, edges labelled with reagent/conditions.
+       Mermaid \`graph LR\` diagram. The diagram MUST be inside a fenced
+       code block whose opening line is exactly three backticks followed
+       by the word \`mermaid\` (no spaces, no colon) and whose closing
+       line is exactly three backticks on their own line. Do NOT emit the
+       diagram as plain text, an indented block, or with just the word
+       "mermaid" on its own line — the UI will only render diagrams
+       inside a proper \`\`\`mermaid …\`\`\` fence. Use one node per
+       intermediate and label every edge with reagent/conditions.
+       Any node label that contains parentheses, colons, commas, slashes,
+       pipes or angle brackets MUST be wrapped in double quotes — mermaid's
+       lexer treats an unquoted \`(\` inside \`[…]\` as an alternate node
+       shape and will fail to parse the diagram otherwise. Prefer quoting
+       every label defensively.
+       Example (structure, not content):
+           \`\`\`mermaid
+           graph LR
+             A["Feed compound"] -->|"reagent, T, P"| B["Intermediate"]
+             B --> C["Final product"]
+           \`\`\`
    ### 2.4 Key Intermediates
        Table: Intermediate | CAS# (if known) | Role | Criticality.
 
@@ -505,6 +522,11 @@ RULES
    Chronological Mermaid \`gantt\` diagram of the top 8-12 relevant patents,
    showing filing → expiry → geographies. Highlight patents expiring
    within 3 years (near-term opportunity) and within 8 years (long shadow).
+   The diagram MUST be inside a fenced code block whose opening line is
+   exactly three backticks followed by \`mermaid\` (no spaces, no colon)
+   and whose closing line is exactly three backticks on their own line —
+   do not emit the diagram as plain text or with only the word "mermaid"
+   on its own line.
 
 ## 6. Workaround & Design-Around Suggestions
    For each Critical or High FTO finding: concrete alternative synthesis
