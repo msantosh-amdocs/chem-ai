@@ -1,5 +1,12 @@
 import type { AgentAccent, DocumentKind, SpecialistRole } from "./personas";
 
+/** Broad industry the session is scoped to — see server types.ts for details. */
+export type SessionIndustry =
+  | "chemical"
+  | "pharmaceutical"
+  | "semiconductor"
+  | "other";
+
 export interface UploadedDoc {
   id: string;
   filename: string;
@@ -174,6 +181,12 @@ export interface ArchitectureSession {
   costs?: SessionCosts;
   /** Wall-clock phase durations. Populated incrementally. */
   durations?: SessionDurations;
+  /**
+   * Industry classification derived from the refined concept. Drives
+   * whether Wave 1 runs `procedure` (chemical / pharma) or
+   * `semiconductor` (chip projects). Missing on legacy sessions.
+   */
+  industry?: SessionIndustry;
   error?: string;
 }
 
@@ -194,6 +207,11 @@ export interface HistorySummary {
   costs: SessionCosts | null;
   /** Wall-clock durations recorded during the run, or null if not tracked. */
   durations: SessionDurations | null;
+  /**
+   * Industry classification derived from the refined concept, or null
+   * if the run has not yet reached the lock step (or predates the field).
+   */
+  industry: SessionIndustry | null;
   analyst: { id: string; name: string; model: string };
   teams: Array<{
     kind: DocumentKind;

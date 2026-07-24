@@ -74,6 +74,44 @@ describe("personaToSnapshot / teamsToSnapshot", () => {
     expect(teams.length).toBeGreaterThan(0);
     for (const t of teams) expect(t.members.length).toBeGreaterThan(0);
   });
+
+  it("includes the Semiconductor Manufacturing team by default", () => {
+    // Regression guard: the semiconductor team is a real, always-configured
+    // department (activates only on semiconductor runs) — it must NOT
+    // silently drop off the defaults list.
+    const kinds = defaultTeams().map((t) => t.kind);
+    expect(kinds).toContain("semiconductor");
+    const semi = defaultTeams().find((t) => t.kind === "semiconductor");
+    expect(semi?.members.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("includes an organic-chemistry expert on the Semiconductor team", () => {
+    // Regression guard: fab is chemistry-first (resists, precursors,
+    // etchants, slurries, cleans, packaging polymers). A permanent
+    // organic-chem seat MUST ship in the default semi team so
+    // semiconductor debates always have that expertise on the table.
+    const semi = defaultTeams().find((t) => t.kind === "semiconductor");
+    expect(semi).toBeTruthy();
+    const chem = semi!.members.find((m) =>
+      /nikhil|chem/i.test(`${m.id} ${m.tagline ?? ""} ${m.roleDescription ?? ""}`),
+    );
+    expect(chem).toBeTruthy();
+    // The chemist ships under the semiconductor role, not procedure,
+    // so this seat participates in the semi debate loop.
+    expect(chem?.role).toBe("semiconductor_engineer");
+    expect(
+      /organic|resist|precursor|slurry|photores/i.test(
+        `${chem?.tagline ?? ""} ${chem?.roleDescription ?? ""}`,
+      ),
+    ).toBe(true);
+  });
+
+  it("permits up to 5 members on the Semiconductor team", () => {
+    // Parity with Procedure (5) — the semi team needs the head-room
+    // for the chemistry seat plus process integration + back-end +
+    // EHS + one flex hire (metrology / test / packaging specialist).
+    expect(KIND_MAX_MEMBERS.semiconductor).toBeGreaterThanOrEqual(5);
+  });
 });
 
 describe("applyEvent (pure reducer)", () => {

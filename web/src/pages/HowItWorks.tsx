@@ -390,9 +390,11 @@ function PipelineDAG() {
         <title id="pipeline-dag-title">4-wave pipeline DAG</title>
         <desc id="pipeline-dag-desc">
           The refined concept feeds four sequential waves of departments. Wave 1
-          runs Market Analysis and Procedure in parallel. Wave 2 runs Procurement
-          and IP in parallel once Procedure is done. Wave 3 runs Finance. Wave 4
-          runs Presentation, which aggregates everything.
+          runs Market Analysis and one of Procedure / Semiconductor Manufacturing
+          (mutually exclusive — picked by the analyst's industry
+          classification) in parallel. Wave 2 runs Procurement and IP in
+          parallel once the process artifact is done. Wave 3 runs Finance.
+          Wave 4 runs Presentation, which aggregates everything.
         </desc>
         <ArrowMarker />
 
@@ -447,8 +449,8 @@ function PipelineDAG() {
           y={90}
           w={220}
           h={80}
-          title="Procedure"
-          subtitle="route · scheme · balance · lab + industrial · EHS"
+          title="Procedure OR Semiconductor Mfg"
+          subtitle="chemical / pharma → Procedure; chip → Semiconductor"
           fill={COLORS.accentBoxFill}
           border={COLORS.accentBoxBorder}
           textColor={COLORS.accentBoxText}
@@ -687,9 +689,11 @@ export function HowItWorksPage() {
             reaches <span className="font-mono">≥ 85</span>.
           </li>
           <li>
-            <span className="font-semibold">Pipeline</span> — six specialist
-            departments run in a 4-wave DAG: Market Analysis, Procedure,
-            Procurement, Intellectual Property, Finance, and Presentation.
+            <span className="font-semibold">Pipeline</span> — specialist
+            departments run in a 4-wave DAG: Market Analysis, either
+            Procedure (chemical / pharma) or Semiconductor Manufacturing
+            (chip projects), Procurement, Intellectual Property, Finance,
+            and Presentation.
           </li>
           <li>
             <span className="font-semibold">Debate</span> — inside each
@@ -884,9 +888,17 @@ const DEPARTMENTS: Array<{
     name: "Procedure",
     wave: 1,
     size: "5 specialists",
-    produces: "Procedure & Route of Synthesis",
+    produces: "Procedure & Route of Synthesis (chemical / pharma runs only)",
     detail:
-      "Chosen route, reaction scheme (Mermaid), step-wise conditions (T / P / moles / yield), material balance, lab + industrial configuration, hazards + EHS register, waste + effluent plan. Includes a dedicated organic-chemistry expert (Dr. Nikhil).",
+      "Chosen route, reaction scheme (Mermaid), step-wise conditions (T / P / moles / yield), material balance, lab + industrial configuration, hazards + EHS register, waste + effluent plan. Includes a dedicated organic-chemistry expert (Dr. Nikhil). Skipped on semiconductor runs.",
+  },
+  {
+    name: "Semiconductor Manufacturing",
+    wave: 1,
+    size: "3 specialists",
+    produces: "Semiconductor Manufacturing (chip projects only)",
+    detail:
+      "Runs INSTEAD of Procedure when the analyst classifies the concept as a semiconductor project. Covers substrate + node choice, FEOL (isolation, gate, implant, silicidation, contact), photolithography strategy, BEOL interconnect, wafer probe, packaging (traditional QFN / BGA plus advanced FOWLP / 2.5D / 3D / HBM / chiplet), final test + reliability, yield model, cleanroom + facilities, gases + chemistries, and a tool-list CAPEX feeder for Procurement. Includes a dedicated organic-chemistry expert (Dr. Nikhil) who owns resist / developer / precursor / etch / CMP-slurry / clean / packaging-polymer chemistry — because every wafer-fab step is a chemistry step.",
   },
   {
     name: "Procurement",

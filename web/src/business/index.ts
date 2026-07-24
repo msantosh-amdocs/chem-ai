@@ -15,9 +15,16 @@ export {
   PIPELINE_WAVES,
   derivePipelineNodeStatus,
   canonicalKindOrder,
+  processKindForIndustry,
+  isProcessKindActive,
   type PipelineNodeStatus,
 } from "./pipeline";
 export { buildSolutionPack, slugifySessionTitle } from "./exporter";
+export {
+  buildWordDocument,
+  buildArtifactWord,
+  buildSessionPackWord,
+} from "./wordExporter";
 export {
   formatDuration,
   formatCompactDuration,

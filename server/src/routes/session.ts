@@ -52,13 +52,22 @@ const specialistSchema = z.object({
     "analyst",
     "market_analyst",
     "process_engineer",
+    "semiconductor_engineer",
     "procurement_specialist",
     "finance_analyst",
     "ip_analyst",
     "presenter",
   ]),
   produces: z
-    .enum(["market", "procedure", "procurement", "ip", "finance", "presentation"])
+    .enum([
+      "market",
+      "procedure",
+      "semiconductor",
+      "procurement",
+      "ip",
+      "finance",
+      "presentation",
+    ])
     .optional(),
   name: z.string().trim().min(1).max(60),
   tagline: z.string().max(120).default(""),
@@ -71,7 +80,15 @@ const specialistSchema = z.object({
 });
 
 const teamSchema = z.object({
-  kind: z.enum(["market", "procedure", "procurement", "ip", "finance", "presentation"]),
+  kind: z.enum([
+    "market",
+    "procedure",
+    "semiconductor",
+    "procurement",
+    "ip",
+    "finance",
+    "presentation",
+  ]),
   minMembers: z.number().int().min(1).max(10),
   members: z.array(specialistSchema).min(1).max(6),
 });

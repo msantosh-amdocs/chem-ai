@@ -19,6 +19,7 @@ import { formatCompactDuration, formatDuration } from "../business";
 const ALL_KINDS: DocumentKind[] = [
   "market",
   "procedure",
+  "semiconductor",
   "procurement",
   "ip",
   "finance",

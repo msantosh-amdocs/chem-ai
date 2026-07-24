@@ -1,6 +1,12 @@
 import clsx from "clsx";
 
-export type PillStatus = "disabled" | "queued" | "running" | "done" | "error";
+export type PillStatus =
+  | "disabled"
+  | "queued"
+  | "running"
+  | "done"
+  | "error"
+  | "skipped";
 
 interface Props {
   status: PillStatus;
@@ -18,6 +24,7 @@ export function StatusPill({ status, label }: Props) {
     running: "bg-amber-100 text-amber-800",
     done: "bg-emerald-100 text-emerald-800",
     error: "bg-rose-100 text-rose-800",
+    skipped: "bg-slate-100 text-slate-500 italic",
   }[status];
   const defaultLabel = {
     disabled: "off",
@@ -25,6 +32,7 @@ export function StatusPill({ status, label }: Props) {
     running: "running",
     done: "done",
     error: "error",
+    skipped: "n/a",
   }[status];
   return (
     <span

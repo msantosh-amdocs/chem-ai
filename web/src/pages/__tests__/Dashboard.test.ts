@@ -48,6 +48,7 @@ function makeSummary(overrides: Partial<HistorySummary> = {}): HistorySummary {
     },
     costs: null,
     durations: null,
+    industry: null,
     analyst: { id: "aarav", name: "Aarav", model: "gpt-4" },
     teams: [],
     artifacts: [],

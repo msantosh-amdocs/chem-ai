@@ -1,5 +1,6 @@
 import { promptModel, type PromptResult } from "./llm.js";
 import { priceUsage, roundUsd } from "./costs.js";
+import { classifyIndustryFromConcept } from "./industry.js";
 import {
   refinePrompt,
   refinedConceptPrompt,
@@ -20,6 +21,7 @@ import type {
   RefinementRound,
   SessionCosts,
   SessionDurations,
+  SessionIndustry,
   Specialist,
   StageCost,
   StageRound,
@@ -336,6 +338,13 @@ export async function lockAndProduceConcept(
   session.status = "locked";
   session.updatedAt = new Date().toISOString();
 
+  // Determine which industry this run is scoped to (used by
+  // `runGeneration` to pick between the Procedure and Semiconductor
+  // Manufacturing departments in Wave 1). Best-effort classification —
+  // if it comes back "other" the orchestrator falls back to the safe
+  // default (Procedure).
+  session.industry = classifyIndustryFromConcept(content);
+
   // Analyst duration = wall-clock from the first refinement round's
   // `createdAt` to the moment the refined concept was finalised. We
   // deliberately anchor on the first refinement round rather than
@@ -576,11 +585,23 @@ async function runStageDebate(
 const ORDER: DocumentKind[] = [
   "market",
   "procedure",
+  "semiconductor",
   "procurement",
   "ip",
   "finance",
   "presentation",
 ];
+
+/**
+ * Decide which of `procedure` / `semiconductor` is the "process
+ * artifact" for a given session. Semiconductor projects use the
+ * Semiconductor Manufacturing department (silicon → wafer fab →
+ * packaging); everything else uses Procedure (chemical / pharma
+ * routes of synthesis). Exported for testing.
+ */
+export function processKindFor(industry: SessionIndustry | undefined): DocumentKind {
+  return industry === "semiconductor" ? "semiconductor" : "procedure";
+}
 
 export interface GenerateInput {
   session: ArchitectureSession;
@@ -627,6 +648,7 @@ export async function runGeneration(
       const upstream: UpstreamArtifacts = {
         market: artifacts.get("market"),
         procedure: artifacts.get("procedure"),
+        semiconductor: artifacts.get("semiconductor"),
         procurement: artifacts.get("procurement"),
         ip: artifacts.get("ip"),
         finance: artifacts.get("finance"),
@@ -698,33 +720,61 @@ export async function runGeneration(
   };
 
   try {
-    // Wave 1 — Market + Procedure in parallel (both operate on Refined Concept).
-    const [market, procedure] = await Promise.all([
+    // Pick the process artifact for this run — procedure (chemical /
+    // pharma / other) vs semiconductor (chip projects). The other
+    // department is skipped for the whole run, even if the team is
+    // configured. This mirrors the mutual-exclusivity of §2
+    // Industry in the Refined Concept.
+    const processKind: DocumentKind = processKindFor(session.industry);
+    const skippedProcessKind: DocumentKind =
+      processKind === "procedure" ? "semiconductor" : "procedure";
+
+    // Wave 1 — Market + (Procedure OR Semiconductor) in parallel.
+    // Both operate directly on the Refined Concept.
+    const [market, processArtifact] = await Promise.all([
       runStage("market"),
-      runStage("procedure"),
+      runStage(processKind),
     ]);
 
-    // Wave 2 — Procurement + IP in parallel (both need Procedure).
-    // Procurement additionally leans on Market for scale sizing; IP leans on
-    // Market for jurisdictions. If Procedure failed we skip both.
+    // Emit an explicit skip event for the OTHER process artifact so the
+    // UI can label its tile deterministically (rather than leaving it
+    // silently "queued" forever). We only emit this if the team is
+    // actually configured — a session that never had a semiconductor
+    // team shouldn't get a spurious event for it.
+    if (teams.has(skippedProcessKind)) {
+      const reason =
+        processKind === "semiconductor"
+          ? "Procedure skipped — this run was classified as a semiconductor project, so the Semiconductor Manufacturing department ran instead."
+          : "Semiconductor Manufacturing skipped — this run was classified as a chemical / pharma project, so the Procedure department ran instead.";
+      emit({
+        type: "artifact.error",
+        kind: skippedProcessKind,
+        message: reason,
+      });
+    }
+
+    // Wave 2 — Procurement + IP in parallel. Both need the process
+    // artifact from Wave 1 (whichever one ran). Procurement
+    // additionally leans on Market for scale sizing; IP leans on
+    // Market for jurisdictions. If the process artifact failed we skip both.
     let procurement: DocumentArtifact | null = null;
     let ip: DocumentArtifact | null = null;
     if (teams.has("procurement") || teams.has("ip")) {
-      if (!procedure) {
+      if (!processArtifact) {
+        const processLabel =
+          processKind === "semiconductor" ? "Semiconductor Manufacturing" : "Procedure";
         if (teams.has("procurement")) {
           emit({
             type: "artifact.error",
             kind: "procurement",
-            message:
-              "Procurement skipped — Procedure is required upstream and it failed or was disabled.",
+            message: `Procurement skipped — ${processLabel} is required upstream and it failed or was disabled.`,
           });
         }
         if (teams.has("ip")) {
           emit({
             type: "artifact.error",
             kind: "ip",
-            message:
-              "IP analysis skipped — Procedure is required upstream and it failed or was disabled.",
+            message: `IP analysis skipped — ${processLabel} is required upstream and it failed or was disabled.`,
           });
         }
       } else {
@@ -754,7 +804,7 @@ export async function runGeneration(
 
     // Wave 4 — Presentation (aggregates everything; runs even if some upstream failed, so long as at least one artifact exists).
     if (teams.has("presentation")) {
-      const anyUpstream = market || procedure || procurement || ip || finance;
+      const anyUpstream = market || processArtifact || procurement || ip || finance;
       if (anyUpstream) {
         await runStage("presentation");
       } else {
@@ -800,6 +850,7 @@ function firstNonEmptyLine(s: string): string {
   }
   return "";
 }
+
 
 function clampScore(v: unknown): number {
   const n = typeof v === "number" ? v : Number(v);

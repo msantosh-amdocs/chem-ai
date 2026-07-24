@@ -16,6 +16,7 @@ export type {
   DocumentArtifact,
   SessionStatus,
   SessionDurations,
+  SessionIndustry,
   ArchitectureSession,
   HistorySummary,
   HistoryAverages,

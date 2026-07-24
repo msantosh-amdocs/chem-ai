@@ -5,6 +5,8 @@ import {
   SpecialistAvatar,
   DebateRounds,
   buildSolutionPack,
+  buildArtifactWord,
+  buildSessionPackWord,
   slugifySessionTitle,
 } from "../business";
 import {
@@ -14,6 +16,7 @@ import {
   KIND_SHORT,
   type DocumentKind,
   type DocumentArtifact,
+  type SessionIndustry,
   type SpecialistSnapshot,
   type StageTeamSnapshot,
 } from "../connector";
@@ -21,11 +24,25 @@ import {
 const ALL: DocumentKind[] = [
   "market",
   "procedure",
+  "semiconductor",
   "procurement",
   "ip",
   "finance",
   "presentation",
 ];
+
+/**
+ * Hide the process artifact that WASN'T selected for this run so the
+ * Documents tab stays uncluttered. Semiconductor runs hide Procedure;
+ * chemical/pharma/other runs hide Semiconductor. Sessions with no
+ * industry set yet (still refining) fall through to showing both
+ * placeholders — the pipeline resolves which one runs at lock time.
+ */
+function isKindActive(kind: DocumentKind, industry: SessionIndustry | undefined): boolean {
+  if (kind === "semiconductor") return industry === "semiconductor";
+  if (kind === "procedure") return industry !== "semiconductor";
+  return true;
+}
 
 type DocStatus = "pending" | "streaming" | "done" | "error";
 
@@ -75,12 +92,27 @@ export function DocumentsPage() {
     triggerDownload(filename, activeBody);
   };
 
+  const downloadOneWord = () => {
+    const { filename, blob } = buildArtifactWord(
+      currentSession,
+      active,
+      activeTitle,
+      activeBody,
+    );
+    triggerBlobDownload(filename, blob);
+  };
+
   const downloadAll = () => {
     const bundle = buildSolutionPack(currentSession);
     triggerDownload(
       `${slugifySessionTitle(currentSession.title)}-market-research-pack.md`,
       bundle,
     );
+  };
+
+  const downloadAllWord = () => {
+    const { filename, blob } = buildSessionPackWord(currentSession);
+    triggerBlobDownload(filename, blob);
   };
 
   return (
@@ -91,8 +123,15 @@ export function DocumentsPage() {
             {currentSession.title}
           </h1>
           <p className="text-slate-600 mt-1">
-            {ALL.filter((k) => artByKind.get(k)?.content).length} of{" "}
-            {teamByKind.size} artifacts produced ·{" "}
+            {ALL.filter(
+              (k) =>
+                isKindActive(k, currentSession.industry) && artByKind.get(k)?.content,
+            ).length}{" "}
+            of{" "}
+            {ALL.filter(
+              (k) => isKindActive(k, currentSession.industry) && teamByKind.has(k),
+            ).length}{" "}
+            artifacts produced ·{" "}
             <button
               onClick={() => setTab("session-pipeline")}
               className="text-slate-700 underline underline-offset-2 hover:text-slate-900"
@@ -101,14 +140,38 @@ export function DocumentsPage() {
             </button>
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <button className="btn btn-ghost" onClick={copyToClipboard}>
             Copy this
           </button>
-          <button className="btn btn-ghost" onClick={downloadOne}>
+          <button
+            className="btn btn-ghost"
+            onClick={downloadOne}
+            disabled={!activeBody}
+            title="Download the current document as Markdown"
+          >
             Download .md
           </button>
-          <button className="btn btn-primary" onClick={downloadAll}>
+          <button
+            className="btn btn-ghost"
+            onClick={downloadOneWord}
+            disabled={!activeBody}
+            title="Download the current document as a Word document (opens in Word / LibreOffice / Google Docs)"
+          >
+            Download .doc
+          </button>
+          <button
+            className="btn btn-ghost"
+            onClick={downloadAllWord}
+            title="Download the full research pack as a single Word document"
+          >
+            Word pack
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={downloadAll}
+            title="Download the full research pack as a single Markdown file"
+          >
             Download pack
           </button>
         </div>
@@ -123,7 +186,7 @@ export function DocumentsPage() {
           status="done"
           spec={currentSession.specialists.analyst}
         />
-        {ALL.filter((k) => teamByKind.has(k)).map((k) => {
+        {ALL.filter((k) => teamByKind.has(k) && isKindActive(k, currentSession.industry)).map((k) => {
           const team = teamByKind.get(k)!;
           const lead = team.members[0]!;
           const art = artByKind.get(k);
@@ -272,6 +335,16 @@ function DocTab({
 
 function triggerDownload(filename: string, content: string) {
   const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  triggerBlobDownload(filename, blob);
+}
+
+/**
+ * Shared blob → download helper. Used for both text (Markdown) and
+ * binary-ish (Word HTML) downloads. Kept separate so the Word
+ * exporter can hand us a pre-built Blob with the correct MIME type
+ * instead of stringifying and re-wrapping.
+ */
+function triggerBlobDownload(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

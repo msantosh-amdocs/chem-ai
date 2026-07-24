@@ -66,6 +66,7 @@ function summarize(s: ArchitectureSession) {
     },
     costs: s.costs ?? null,
     durations: s.durations ?? null,
+    industry: s.industry ?? null,
     analyst: analyst
       ? { id: analyst.id, name: analyst.name, model: analyst.model }
       : { id: "", name: "?", model: "?" },

@@ -10,6 +10,7 @@ import {
   computeLiveDuration,
   derivePipelineNodeStatus,
   formatDuration,
+  isProcessKindActive,
 } from "../business";
 import {
   useCurrentSession,
@@ -68,9 +69,15 @@ export function PipelinePage() {
 
   // Progress computation — must be a hook, so it runs on every render
   // regardless of whether currentSession is null. We just no-op if it is.
+  // We exclude the inactive process kind (procedure vs semiconductor)
+  // from the total so a run where §2 Industry picked one of them
+  // doesn't get stuck at "6 of 7 done" forever.
   const progress = useMemo(() => {
     if (!currentSession) return { pct: 0, done: 0, total: 0, running: 0, errored: 0 };
-    const teams = currentSession.specialists.teams;
+    const industry = currentSession.industry;
+    const teams = currentSession.specialists.teams.filter((t) =>
+      isProcessKindActive(t.kind, industry),
+    );
     const total = teams.length;
     let done = 0;
     let running = 0;
@@ -181,6 +188,7 @@ export function PipelinePage() {
                         liveGenerating: live.generating,
                         liveDone: live.done,
                         liveErrors: live.errors,
+                        industry: currentSession.industry,
                       });
                       // Live duration: server-stamped when the stage
                       // finished, otherwise wall-clock against the tick.

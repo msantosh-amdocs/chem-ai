@@ -58,6 +58,7 @@ export function PipelineNode({
   const done = status === "done";
   const running = status === "running";
   const disabled = status === "disabled";
+  const skipped = status === "skipped";
 
   const roundsSoFar = artifact?.rounds.length ?? 0;
   const lastRound = artifact?.rounds[artifact.rounds.length - 1];
@@ -73,15 +74,17 @@ export function PipelineNode({
 
   const bg = disabled
     ? "bg-slate-50 border-dashed border-slate-300"
-    : status === "error"
-      ? "bg-rose-50 border-rose-300"
-      : done
-        ? "bg-emerald-50 border-emerald-300"
-        : running
-          ? "bg-amber-50 border-amber-300 shadow-pop"
-          : "bg-white border-slate-200";
+    : skipped
+      ? "bg-slate-50 border-dashed border-slate-300 opacity-70"
+      : status === "error"
+        ? "bg-rose-50 border-rose-300"
+        : done
+          ? "bg-emerald-50 border-emerald-300"
+          : running
+            ? "bg-amber-50 border-amber-300 shadow-pop"
+            : "bg-white border-slate-200";
 
-  const clickable = !disabled && !!onOpen;
+  const clickable = !disabled && !skipped && !!onOpen;
   const Wrapper: "button" | "div" = clickable ? "button" : "div";
 
   return (
@@ -113,7 +116,14 @@ export function PipelineNode({
         <StatusPill status={status} />
       </div>
 
-      {team ? (
+      {skipped ? (
+        <div className="text-xs text-slate-500 italic">
+          Not applicable to this run — the analyst classified this project as{" "}
+          {kind === "procedure" ? "semiconductor" : "chemical / pharma"},
+          so the {kind === "procedure" ? "Semiconductor Manufacturing" : "Procedure"}{" "}
+          department handled the process artifact instead.
+        </div>
+      ) : team ? (
         <>
           <div className="flex -space-x-2 mb-2">
             {team.members.map((m) => {

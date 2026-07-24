@@ -10,6 +10,7 @@ import {
   KIND_MIN_MEMBERS,
   KIND_MAX_MEMBERS,
   KIND_SHORT,
+  KIND_INDUSTRY_HINT,
   PRODUCER_KINDS,
   type DocumentKind,
   type SpecialistPersona,
@@ -284,31 +285,39 @@ function TeamHeader({
   const full = KIND_LABELS[kind];
   const belowMin = count < min;
   const atMax = count >= max;
+  const industryHint = KIND_INDUSTRY_HINT[kind];
   return (
-    <div className="flex items-baseline justify-between mb-3">
-      <div className="flex items-baseline gap-3">
-        <h2 className="font-display text-xl text-slate-900">{short} team</h2>
-        <span className="text-sm text-slate-500">{full}</span>
+    <div className="mb-3">
+      <div className="flex items-baseline justify-between">
+        <div className="flex items-baseline gap-3">
+          <h2 className="font-display text-xl text-slate-900">{short} team</h2>
+          <span className="text-sm text-slate-500">{full}</span>
+        </div>
+        <div className="flex items-center gap-3 text-sm">
+          <span
+            className={
+              belowMin
+                ? "text-rose-600 font-medium"
+                : atMax
+                  ? "text-slate-400"
+                  : "text-slate-500"
+            }
+            title={
+              atMax
+                ? `Team is at its maximum of ${max} members`
+                : `Minimum ${min}, maximum ${max}`
+            }
+          >
+            {count} member{count === 1 ? "" : "s"} · min {min} · max {max}
+            {atMax && " · full"}
+          </span>
+        </div>
       </div>
-      <div className="flex items-center gap-3 text-sm">
-        <span
-          className={
-            belowMin
-              ? "text-rose-600 font-medium"
-              : atMax
-                ? "text-slate-400"
-                : "text-slate-500"
-          }
-          title={
-            atMax
-              ? `Team is at its maximum of ${max} members`
-              : `Minimum ${min}, maximum ${max}`
-          }
-        >
-          {count} member{count === 1 ? "" : "s"} · min {min} · max {max}
-          {atMax && " · full"}
-        </span>
-      </div>
+      {industryHint && (
+        <div className="mt-1 text-xs text-slate-500 italic">
+          {industryHint}
+        </div>
+      )}
     </div>
   );
 }
@@ -363,6 +372,7 @@ function labelForRole(role: SpecialistRole): string {
     analyst: "Analyst",
     market_analyst: "Market Analyst",
     process_engineer: "Process Engineer",
+    semiconductor_engineer: "Semiconductor Engineer",
     procurement_specialist: "Procurement Specialist",
     finance_analyst: "Finance Analyst",
     ip_analyst: "IP Analyst",

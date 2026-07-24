@@ -12,30 +12,60 @@
  *
  * Departments (in canonical order):
  *   1. Market Analysis
- *   2. Procedure       (route of synthesis, mass balance, hazards, scale-up)
- *   3. Procurement     (hardware + raw materials + landed cost)
- *   4. Intellectual Property (freedom-to-operate, patent landscape)
- *   5. Finance         (5-yr projections, unit economics, sales forecast)
- *   6. Presentation    (executive summary + full report)
+ *   2a. Procedure         (chemical / pharma — route of synthesis, mass
+ *                          balance, hazards, scale-up)  }  one of these
+ *   2b. Semiconductor     (silicon → wafer fab → packaging + test,      }  runs per
+ *                          for chip projects only)                       }  session,
+ *   3. Procurement        (hardware + raw materials + landed cost)      }  chosen by
+ *   4. Intellectual Property (freedom-to-operate, patent landscape)     }  session.industry
+ *   5. Finance            (5-yr projections, unit economics, sales)
+ *   6. Presentation       (executive summary + full report)
  */
 
 export type SpecialistRole =
   | "analyst"
   | "market_analyst"
   | "process_engineer"
+  | "semiconductor_engineer"
   | "procurement_specialist"
   | "finance_analyst"
   | "ip_analyst"
   | "presenter";
 
-/** Which artifact this specialist produces (analyst has none). */
+/**
+ * Which artifact this specialist produces (analyst has none).
+ *
+ * `procedure` and `semiconductor` are MUTUALLY EXCLUSIVE per run: the
+ * former documents chemical / pharma routes of synthesis; the latter
+ * documents wafer fab + packaging for chip projects. The orchestrator
+ * picks one based on `session.industry` and skips the other.
+ */
 export type DocumentKind =
   | "market"
   | "procedure"
+  | "semiconductor"
   | "procurement"
   | "ip"
   | "finance"
   | "presentation";
+
+/**
+ * Which of the three broad industries the session is scoped to. Set on
+ * the session right after `lockAndProduceConcept` (i.e. once the analyst
+ * has produced the refined concept, from which we can read the
+ * declared industry). Drives whether the orchestrator runs
+ * `procedure` or `semiconductor` in Wave 1.
+ *
+ * `other` is a safety-net bucket for freshly locked sessions that
+ * predate this field or for edge-case inputs the classifier can't
+ * categorise; the orchestrator treats `other` like `chemical` (runs
+ * `procedure`) so nothing silently disappears.
+ */
+export type SessionIndustry =
+  | "chemical"
+  | "pharmaceutical"
+  | "semiconductor"
+  | "other";
 
 export interface AgentAccent {
   text: string;
@@ -336,6 +366,15 @@ export interface ArchitectureSession {
 
   /** Wall-clock phase durations. Populated incrementally. */
   durations?: SessionDurations;
+
+  /**
+   * Broad industry classification derived from the refined concept.
+   * Populated at `lockAndProduceConcept` time and used by the
+   * orchestrator to pick between `procedure` and `semiconductor` in
+   * Wave 1. Missing on sessions written before this field existed —
+   * consumers should treat `undefined` as `chemical` (safe default).
+   */
+  industry?: SessionIndustry;
 
   error?: string;
 }

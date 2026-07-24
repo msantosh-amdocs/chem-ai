@@ -42,6 +42,105 @@ describe("<Markdown>", () => {
     expect(code!.textContent).toContain("graph LR");
   });
 
+  it("passes a mermaid `pie` block through so the Finance CAPEX chart can render", () => {
+    // Charts required by the Finance prompt (§3.1 / §5.1) — verify the
+    // fenced block survives the markdown pipeline intact and lands in a
+    // `code.language-mermaid` so the async renderer can pick it up.
+    const src = [
+      "```mermaid",
+      "pie showData title CAPEX Breakdown (INR ₹80 Cr)",
+      '    "Process Equipment" : 45',
+      '    "Building & Civil" : 20',
+      '    "Utilities & Services" : 8',
+      '    "Contingency & Preop" : 4',
+      '    "IT & Automation" : 3',
+      "```",
+    ].join("\n");
+    const { container } = render(<Markdown source={src} />);
+    const code = container.querySelector("code.language-mermaid");
+    expect(code).not.toBeNull();
+    expect(code!.textContent).toContain("pie showData");
+    expect(code!.textContent).toContain("Process Equipment");
+  });
+
+  it("passes a mermaid `xychart-beta` bar block through so the Finance revenue chart can render", () => {
+    const src = [
+      "```mermaid",
+      "xychart-beta",
+      '    title "5-Year Revenue (INR ₹ Cr)"',
+      "    x-axis [Y1, Y2, Y3, Y4, Y5]",
+      '    y-axis "Revenue (INR ₹ Cr)" 0 --> 500',
+      "    bar [80, 180, 320, 420, 470]",
+      "```",
+    ].join("\n");
+    const { container } = render(<Markdown source={src} />);
+    const code = container.querySelector("code.language-mermaid");
+    expect(code).not.toBeNull();
+    expect(code!.textContent).toContain("xychart-beta");
+    expect(code!.textContent).toContain("bar [80, 180, 320, 420, 470]");
+  });
+
+  it("passes a mermaid `xychart-beta` combined bar+line block for the P&L chart", () => {
+    const src = [
+      "```mermaid",
+      "xychart-beta",
+      '    title "Revenue (bar) vs EBITDA (line) — INR ₹ Cr"',
+      "    x-axis [Y1, Y2, Y3, Y4, Y5]",
+      '    y-axis "INR ₹ Cr" -50 --> 500',
+      "    bar [80, 180, 320, 420, 470]",
+      "    line [-10, 25, 90, 140, 170]",
+      "```",
+    ].join("\n");
+    const { container } = render(<Markdown source={src} />);
+    const code = container.querySelector("code.language-mermaid");
+    expect(code).not.toBeNull();
+    // Both series survive so mermaid can overlay them.
+    expect(code!.textContent).toMatch(/bar \[/);
+    expect(code!.textContent).toMatch(/line \[-10/);
+  });
+
+  it("leaves `pie` and `xychart-beta` source untouched through the sanitiser (no node-shape mangling)", () => {
+    // The mermaid sanitiser rewrites labels like `A[foo (bar)]` because
+    // mermaid's flowchart lexer would fail on bare parens. Pie and
+    // xychart-beta use a different grammar (bracketed x-axis, quoted
+    // slice labels), so the sanitiser must leave them ALONE — otherwise
+    // we'd corrupt e.g. `x-axis [Y1, Y2, Y3]` into gibberish.
+    const pieSrc = [
+      "pie showData title CAPEX Breakdown (INR ₹80 Cr)",
+      '    "Process Equipment" : 45',
+      '    "Building & Civil" : 20',
+    ].join("\n");
+    expect(sanitizeMermaidSource(pieSrc)).toBe(pieSrc);
+
+    const xySrc = [
+      "xychart-beta",
+      '    title "5-Year Revenue"',
+      "    x-axis [Y1, Y2, Y3, Y4, Y5]",
+      '    y-axis "INR ₹ Cr" 0 --> 500',
+      "    bar [80, 180, 320, 420, 470]",
+    ].join("\n");
+    expect(sanitizeMermaidSource(xySrc)).toBe(xySrc);
+  });
+
+  it("normaliser recognises bare `pie` and `xychart-beta` diagrams and re-fences them", () => {
+    // Some models emit a bold label + bare mermaid body without the
+    // opening fence. The Markdown component has a defensive normaliser
+    // that recognises the keyword and wraps it — verify the new chart
+    // types are on that whitelist.
+    const bareSrc = [
+      "**Chart:**",
+      "",
+      "mermaid",
+      "pie showData title Mix",
+      '    "A" : 50',
+      '    "B" : 30',
+      '    "C" : 20',
+    ].join("\n");
+    const normalized = normalizeMermaidFences(bareSrc);
+    expect(normalized).toMatch(/^```mermaid$/m);
+    expect(normalized).toContain("pie showData");
+  });
+
   it("renders a block math `$$…$$` as a .md-math-block placeholder carrying the TeX source in data-math", () => {
     const src = [
       "Chemistry:",

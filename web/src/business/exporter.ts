@@ -4,6 +4,7 @@ import type { DocumentKind } from "../connector/personas";
 const ALL: DocumentKind[] = [
   "market",
   "procedure",
+  "semiconductor",
   "procurement",
   "ip",
   "finance",
