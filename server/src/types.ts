@@ -248,6 +248,24 @@ export interface DocumentArtifact {
   terminatedBy?: "agreement" | "maxRounds" | "error";
   /** memberId → final round's agreement % */
   finalAgreements: Record<string, number>;
+  /**
+   * ISO timestamp when this department stage started (before round 1
+   * drafts fan out). Written eagerly on the streaming placeholder so
+   * the UI can display an in-flight duration; never rewritten once set.
+   */
+  startedAt?: string;
+  /**
+   * ISO timestamp when the department stage terminated (success or
+   * error). Together with `startedAt` this gives the wall-clock
+   * duration of this department's contribution to the run.
+   */
+  endedAt?: string;
+  /**
+   * Convenience — `endedAt - startedAt` in milliseconds. Persisted
+   * alongside the timestamps so the client doesn't need to reparse
+   * ISO strings for every render.
+   */
+  durationMs?: number;
 }
 
 export type SessionStatus =
@@ -257,6 +275,32 @@ export type SessionStatus =
   | "completed"
   | "error"
   | "cancelled";
+
+/**
+ * Wall-clock durations for the different phases of a run, in
+ * milliseconds. All fields are optional — a session written before this
+ * struct existed, or one that hasn't reached a phase yet, will simply
+ * omit the field. Consumers should compute totals defensively.
+ */
+export interface SessionDurations {
+  /**
+   * Time spent in analyst-driven work — refinement Q&A rounds plus the
+   * final refined-concept generation. Measured from the first
+   * refinement round's `createdAt` to `refinedIdea.createdAt`.
+   */
+  analystMs?: number;
+  /**
+   * Per-department wall-clock duration in milliseconds. Populated as
+   * each department's `DocumentArtifact` gets its `endedAt`.
+   */
+  perTeam: Partial<Record<DocumentKind, number>>;
+  /**
+   * End-to-end duration: `session.endedAt - session.createdAt`. Set
+   * when the session reaches a terminal status (completed / error /
+   * cancelled).
+   */
+  totalMs?: number;
+}
 
 export interface ArchitectureSession {
   id: string;
@@ -282,6 +326,16 @@ export interface ArchitectureSession {
 
   /** Rolled-up token + estimated USD cost. Populated as the run progresses. */
   costs?: SessionCosts;
+
+  /**
+   * ISO timestamp of when the session reached a terminal status. Kept
+   * separate from `updatedAt` because the latter is bumped on any
+   * intermediate persistence write; this one is set exactly once.
+   */
+  endedAt?: string;
+
+  /** Wall-clock phase durations. Populated incrementally. */
+  durations?: SessionDurations;
 
   error?: string;
 }

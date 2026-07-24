@@ -130,6 +130,12 @@ export interface DocumentArtifact {
   rounds: StageRound[];
   terminatedBy?: "agreement" | "maxRounds" | "error";
   finalAgreements: Record<string, number>;
+  /** ISO — stamped when the department stage begins. See server types.ts. */
+  startedAt?: string;
+  /** ISO — stamped when the department stage finishes (success or error). */
+  endedAt?: string;
+  /** Convenience — `endedAt - startedAt` in ms. Absent while streaming. */
+  durationMs?: number;
 }
 
 export type SessionStatus =
@@ -140,12 +146,20 @@ export type SessionStatus =
   | "error"
   | "cancelled";
 
+/** Wall-clock timings for the different phases of a run, in ms. */
+export interface SessionDurations {
+  analystMs?: number;
+  perTeam: Partial<Record<DocumentKind, number>>;
+  totalMs?: number;
+}
+
 export interface ArchitectureSession {
   id: string;
   title: string;
   idea: string;
   createdAt: string;
   updatedAt: string;
+  endedAt?: string;
   status: SessionStatus;
   settings: GenerationSettings;
   specialists: {
@@ -158,6 +172,8 @@ export interface ArchitectureSession {
   artifacts: DocumentArtifact[];
   /** Rolled-up token + estimated USD cost. Populated as the run progresses. */
   costs?: SessionCosts;
+  /** Wall-clock phase durations. Populated incrementally. */
+  durations?: SessionDurations;
   error?: string;
 }
 
@@ -167,6 +183,7 @@ export interface HistorySummary {
   idea: string;
   createdAt: string;
   updatedAt: string;
+  endedAt: string | null;
   status: SessionStatus;
   refinementRounds: number;
   completeness: number | null;
@@ -175,6 +192,8 @@ export interface HistorySummary {
   settings: GenerationSettings;
   /** Rolled-up token + USD cost estimate, or null if the run never produced any. */
   costs: SessionCosts | null;
+  /** Wall-clock durations recorded during the run, or null if not tracked. */
+  durations: SessionDurations | null;
   analyst: { id: string; name: string; model: string };
   teams: Array<{
     kind: DocumentKind;
@@ -189,7 +208,21 @@ export interface HistorySummary {
     rounds: number;
     terminatedBy: "agreement" | "maxRounds" | "error" | null;
     finalAgreements: Record<string, number>;
+    startedAt: string | null;
+    endedAt: string | null;
+    durationMs: number | null;
   }>;
+}
+
+/**
+ * Running-average durations across every session on disk. Returned as
+ * a sibling of `sessions` from `GET /history` so the History page can
+ * display "typical" reference times next to the per-run measurements.
+ */
+export interface HistoryAverages {
+  perTeam: Partial<Record<DocumentKind, { avgMs: number; samples: number }>>;
+  session: { avgMs: number; samples: number } | null;
+  analyst: { avgMs: number; samples: number } | null;
 }
 
 export interface SdkModelParameterDefinition {

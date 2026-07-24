@@ -3,6 +3,7 @@ import clsx from "clsx";
 import { SpecialistAvatar } from "./SpecialistAvatar";
 import { StatusPill } from "../sandbox";
 import type { PipelineNodeStatus } from "./pipeline";
+import { formatCompactDuration, formatDuration } from "./duration";
 import { KIND_LABELS, KIND_SHORT, type DocumentKind } from "../connector/personas";
 import type {
   DocumentArtifact,
@@ -20,6 +21,15 @@ interface Props {
   error?: string;
   /** Per-team token + USD rollup surfaced under the tile. */
   cost?: StageCost;
+  /**
+   * Wall-clock duration for this team, in ms. Either the server-stamped
+   * `durationMs` (once the stage finished) or a live delta computed by
+   * the caller from `startedAt` to `Date.now()` while streaming.
+   */
+  durationMs?: number | null;
+  /** Cross-history average duration for this team (ms). */
+  averageMs?: number;
+  averageSamples?: number;
   /** Highlight when this tile's debate is expanded on the Pipeline page. */
   selected?: boolean;
   /** Called when the tile is clicked — parent decides what to reveal. */
@@ -38,6 +48,9 @@ export function PipelineNode({
   maxRounds,
   activeMembers,
   cost,
+  durationMs,
+  averageMs,
+  averageSamples,
   selected,
   onOpen,
 }: Props) {
@@ -170,6 +183,30 @@ export function PipelineNode({
                   {" "}
                   · {(cost.totalTokens / 1000).toFixed(1)}k tok
                 </span>
+              </span>
+            </div>
+          )}
+          {durationMs != null && (
+            <div
+              className="mt-1 text-[10px] text-slate-500 flex items-baseline justify-between gap-1"
+              title={
+                (running ? "Running for " : "Took ") +
+                formatDuration(durationMs) +
+                (averageMs
+                  ? ` · team avg ${formatDuration(averageMs)} across ${averageSamples} run${averageSamples === 1 ? "" : "s"}`
+                  : "")
+              }
+            >
+              <span>{running ? "elapsed" : "duration"}</span>
+              <span className="font-mono text-slate-700">
+                {formatCompactDuration(durationMs)}
+                {running && <span className="text-amber-600">…</span>}
+                {averageMs && (
+                  <span className="text-slate-400 font-normal">
+                    {" "}
+                    / avg {formatCompactDuration(averageMs)}
+                  </span>
+                )}
               </span>
             </div>
           )}

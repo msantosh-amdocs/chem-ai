@@ -4,6 +4,7 @@ import type {
   ArchitectureSession,
   ClarifyAnswer,
   DocumentArtifact,
+  HistoryAverages,
   HistorySummary,
   SessionEvent,
   SdkModel,
@@ -79,6 +80,12 @@ export interface StoreState {
 
   live: LiveState;
   historyList: HistorySummary[];
+  /**
+   * Rolling averages returned alongside `/history` — used by the
+   * History and Pipeline pages to render "typical duration" hints.
+   * Null until the first successful `loadHistory` call.
+   */
+  historyAverages: HistoryAverages | null;
   eventSource: EventSource | null;
 
   loadHealth: () => Promise<void>;
@@ -327,6 +334,7 @@ export const useStore = create<StoreState>((set, get) => ({
 
   live: initialLive,
   historyList: [],
+  historyAverages: null,
   eventSource: null,
 
   async loadHealth() {
@@ -351,8 +359,8 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 
   async loadHistory() {
-    const { sessions } = await api.listHistory();
-    set({ historyList: sessions });
+    const { sessions, averages } = await api.listHistory();
+    set({ historyList: sessions, historyAverages: averages ?? null });
   },
 
   async openSession(id) {
@@ -380,7 +388,7 @@ export const useStore = create<StoreState>((set, get) => ({
 
   async clearHistory() {
     await api.clearHistory();
-    set({ historyList: [], currentSession: null });
+    set({ historyList: [], historyAverages: null, currentSession: null });
   },
 
   updateAnalyst(patch) {

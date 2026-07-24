@@ -15,11 +15,16 @@ export type {
   StageRound,
   DocumentArtifact,
   SessionStatus,
+  SessionDurations,
   ArchitectureSession,
   HistorySummary,
+  HistoryAverages,
   SdkModel,
   SdkModelParameterDefinition,
   SessionEvent,
+  StageCost,
+  SessionCosts,
+  TerminationPolicy,
 } from "./types";
 export * from "./personas";
 export {

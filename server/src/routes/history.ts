@@ -1,20 +1,26 @@
 import { Router } from "express";
 import { history } from "../store/history.js";
-import type { ArchitectureSession, DocumentArtifact, StageTeam } from "../types.js";
+import type {
+  ArchitectureSession,
+  DocumentArtifact,
+  DocumentKind,
+  StageTeam,
+} from "../types.js";
 
 export const router = Router();
 
 router.get("/history", async (_req, res) => {
   const list = await history.list();
-  const sessions: unknown[] = [];
+  const summaries: ReturnType<typeof summarize>[] = [];
   for (const s of list) {
     try {
-      sessions.push(summarize(s));
+      summaries.push(summarize(s));
     } catch {
       // Skip legacy sessions that don't match the current schema.
     }
   }
-  res.json({ sessions });
+  const averages = computeAverages(summaries);
+  res.json({ sessions: summaries, averages });
 });
 
 router.get("/history/:id", async (req, res) => {
@@ -47,6 +53,7 @@ function summarize(s: ArchitectureSession) {
     idea: s.idea?.slice(0, 240) ?? "",
     createdAt: s.createdAt ?? new Date(0).toISOString(),
     updatedAt: s.updatedAt ?? s.createdAt ?? new Date(0).toISOString(),
+    endedAt: s.endedAt ?? null,
     status: s.status ?? "completed",
     refinementRounds: refinement.length,
     completeness: lastRound?.completeness ?? null,
@@ -58,6 +65,7 @@ function summarize(s: ArchitectureSession) {
       terminationPolicy: "threshold_or_max",
     },
     costs: s.costs ?? null,
+    durations: s.durations ?? null,
     analyst: analyst
       ? { id: analyst.id, name: analyst.name, model: analyst.model }
       : { id: "", name: "?", model: "?" },
@@ -74,6 +82,86 @@ function summarize(s: ArchitectureSession) {
       rounds: Array.isArray(a.rounds) ? a.rounds.length : 0,
       terminatedBy: a.terminatedBy ?? null,
       finalAgreements: a.finalAgreements ?? {},
+      startedAt: a.startedAt ?? null,
+      endedAt: a.endedAt ?? null,
+      durationMs: typeof a.durationMs === "number" ? a.durationMs : null,
     })),
+  };
+}
+
+/**
+ * Response payload for `GET /history.averages` — running averages over
+ * every terminal session on disk. Consumers use this to render "your
+ * team typically takes ~4m" hints on the Pipeline and History pages.
+ * A department only contributes to the average when we have a real
+ * `durationMs` for it — a still-running or crashed-before-endedAt
+ * stage is skipped so a partial measurement doesn't drag the average.
+ */
+export interface HistoryAverages {
+  /** Per-team average duration in ms and the number of runs it's based on. */
+  perTeam: Partial<Record<DocumentKind, { avgMs: number; samples: number }>>;
+  /** Average end-to-end session duration for completed runs, in ms. */
+  session: { avgMs: number; samples: number } | null;
+  /** Average analyst-phase duration, in ms. */
+  analyst: { avgMs: number; samples: number } | null;
+}
+
+/**
+ * Fold the per-session durations into a small "typical time" summary.
+ *
+ * Errored sessions are included in per-team averages (they still cost
+ * wall-clock and are worth surfacing) but excluded from the whole-
+ * session average — an early failure would otherwise lie about
+ * end-to-end pace.
+ */
+export function computeAverages(
+  summaries: Array<ReturnType<typeof summarize>>,
+): HistoryAverages {
+  const perTeam: Record<string, { total: number; samples: number }> = {};
+  let sessionTotal = 0;
+  let sessionSamples = 0;
+  let analystTotal = 0;
+  let analystSamples = 0;
+
+  for (const s of summaries) {
+    const d = s.durations;
+    if (!d) continue;
+    if (typeof d.totalMs === "number" && s.status === "completed") {
+      sessionTotal += d.totalMs;
+      sessionSamples += 1;
+    }
+    if (typeof d.analystMs === "number") {
+      analystTotal += d.analystMs;
+      analystSamples += 1;
+    }
+    if (d.perTeam && typeof d.perTeam === "object") {
+      for (const [kind, ms] of Object.entries(d.perTeam)) {
+        if (typeof ms !== "number") continue;
+        const acc = perTeam[kind] ?? { total: 0, samples: 0 };
+        acc.total += ms;
+        acc.samples += 1;
+        perTeam[kind] = acc;
+      }
+    }
+  }
+
+  const perTeamOut: HistoryAverages["perTeam"] = {};
+  for (const [kind, { total, samples }] of Object.entries(perTeam)) {
+    perTeamOut[kind as DocumentKind] = {
+      avgMs: Math.round(total / samples),
+      samples,
+    };
+  }
+
+  return {
+    perTeam: perTeamOut,
+    session:
+      sessionSamples > 0
+        ? { avgMs: Math.round(sessionTotal / sessionSamples), samples: sessionSamples }
+        : null,
+    analyst:
+      analystSamples > 0
+        ? { avgMs: Math.round(analystTotal / analystSamples), samples: analystSamples }
+        : null,
   };
 }

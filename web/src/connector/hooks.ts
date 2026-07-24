@@ -31,6 +31,12 @@ export const useGenSettings = () => useStore((s) => s.genSettings);
 export const useCurrentSession = () => useStore((s) => s.currentSession);
 export const useLive = () => useStore((s) => s.live);
 export const useHistoryList = () => useStore((s) => s.historyList);
+/**
+ * Rolling averages returned alongside `/history`. Null before the
+ * first `loadHistory()` completes; consumers should render defensively
+ * (see `HistoryPage` / `PipelinePage` for the typical fallback UX).
+ */
+export const useHistoryAverages = () => useStore((s) => s.historyAverages);
 export const useDraftAnswers = () => useStore((s) => s.draftAnswers);
 
 export function useConnectorActions() {

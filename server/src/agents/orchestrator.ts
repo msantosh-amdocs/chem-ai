@@ -19,6 +19,7 @@ import type {
   LlmCallCost,
   RefinementRound,
   SessionCosts,
+  SessionDurations,
   Specialist,
   StageCost,
   StageRound,
@@ -60,6 +61,36 @@ function emptySessionCosts(): SessionCosts {
     total: emptyStageCost(),
     usageComplete: true,
   };
+}
+
+function emptyDurations(): SessionDurations {
+  return { perTeam: {} };
+}
+
+/**
+ * Ensure the session has a `durations` object we can mutate in place.
+ * Written this way so the field only appears on sessions that have
+ * actually accumulated timing data — old sessions on disk never grow a
+ * spurious empty object on read.
+ */
+function ensureDurations(session: ArchitectureSession): SessionDurations {
+  if (!session.durations) session.durations = emptyDurations();
+  return session.durations;
+}
+
+/**
+ * Non-negative, integer-millisecond difference between two ISO
+ * timestamps. Returns `undefined` if either input is missing/malformed
+ * so callers can decide how to render the "not measured yet" state.
+ * Clamps to zero rather than emitting negative values, which would
+ * otherwise be possible if the machine clock jumps backwards mid-run.
+ */
+function diffMs(from: string | undefined, to: string | undefined): number | undefined {
+  if (!from || !to) return undefined;
+  const a = Date.parse(from);
+  const b = Date.parse(to);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return undefined;
+  return Math.max(0, Math.round(b - a));
 }
 
 /**
@@ -304,6 +335,18 @@ export async function lockAndProduceConcept(
   session.refinedIdea = { content, createdAt: new Date().toISOString() };
   session.status = "locked";
   session.updatedAt = new Date().toISOString();
+
+  // Analyst duration = wall-clock from the first refinement round's
+  // `createdAt` to the moment the refined concept was finalised. We
+  // deliberately anchor on the first refinement round rather than
+  // `session.createdAt` so the "waiting for the user to click Start
+  // refinement" gap doesn't inflate the analyst timing.
+  const firstRound = session.refinement[0];
+  const analystMs = diffMs(firstRound?.createdAt, session.refinedIdea.createdAt);
+  if (analystMs !== undefined) {
+    ensureDurations(session).analystMs = analystMs;
+  }
+
   await history.upsert(session);
   emit({ type: "concept.completed", refinedIdea: content });
   return session;
@@ -347,6 +390,11 @@ async function runStageDebate(
     policy === "threshold_only"
       ? HARD_ROUND_CAP
       : Math.max(1, settings.maxRounds);
+
+  // Stamp the department's wall-clock start BEFORE we emit the event so
+  // the placeholder artifact persisted mid-flight already carries the
+  // start time — that lets the UI show live elapsed time immediately.
+  const stageStartedAt = new Date().toISOString();
 
   emit({
     type: "artifact.started",
@@ -489,15 +537,24 @@ async function runStageDebate(
   const leadDraft =
     finalRound.drafts.find((d) => d.memberId === lead.id) ?? finalRound.drafts[0]!;
 
+  const stageEndedAt = new Date().toISOString();
+  const durationMs = diffMs(stageStartedAt, stageEndedAt);
+  if (durationMs !== undefined) {
+    ensureDurations(session).perTeam[team.kind] = durationMs;
+  }
+
   return {
     kind: team.kind,
     title: TITLES[team.kind],
     content: leadDraft.content,
     producedBy: lead.id,
-    createdAt: new Date().toISOString(),
+    createdAt: stageEndedAt,
     rounds,
     terminatedBy,
     finalAgreements,
+    startedAt: stageStartedAt,
+    endedAt: stageEndedAt,
+    durationMs,
   };
 }
 
@@ -560,6 +617,12 @@ export async function runGeneration(
     const team = teams.get(kind);
     if (!team) return null;
 
+    // Track the stage start here — mirrored by the `stageStartedAt` inside
+    // `runStageDebate` — so that the streaming placeholder we persist on
+    // every round callback carries a stable `startedAt` value the UI can
+    // use to render live elapsed time.
+    const stageStartedAt = new Date().toISOString();
+
     try {
       const upstream: UpstreamArtifacts = {
         market: artifacts.get("market"),
@@ -577,6 +640,9 @@ export async function runGeneration(
         docTexts,
         async (rounds) => {
           // Persist a streaming placeholder so history is always up-to-date.
+          // We stamp `startedAt` on it — but NOT `endedAt` — so consumers
+          // know the stage is still in flight and can compute a live
+          // duration against wall-clock now().
           const placeholder: DocumentArtifact = {
             kind,
             title: TITLES[kind],
@@ -589,6 +655,7 @@ export async function runGeneration(
             streaming: true,
             rounds,
             finalAgreements: {},
+            startedAt: stageStartedAt,
           };
           artifacts.set(kind, placeholder);
           await persistArtifacts();
@@ -601,16 +668,27 @@ export async function runGeneration(
       return artifact;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const stageEndedAt = new Date().toISOString();
+      const durationMs = diffMs(stageStartedAt, stageEndedAt);
+      // Even failed stages consumed wall-clock time — we record it so
+      // operators can see which department blew up and how long it took
+      // before it did.
+      if (durationMs !== undefined) {
+        ensureDurations(session).perTeam[kind] = durationMs;
+      }
       const failed: DocumentArtifact = {
         kind,
         title: TITLES[kind],
         content: "",
         producedBy: team.members[0]?.id ?? "",
-        createdAt: new Date().toISOString(),
+        createdAt: stageEndedAt,
         error: message,
         rounds: [],
         terminatedBy: "error",
         finalAgreements: {},
+        startedAt: stageStartedAt,
+        endedAt: stageEndedAt,
+        durationMs,
       };
       artifacts.set(kind, failed);
       await persistArtifacts();
@@ -690,6 +768,9 @@ export async function runGeneration(
     }
 
     session.status = "completed";
+    session.endedAt = new Date().toISOString();
+    const totalMs = diffMs(session.createdAt, session.endedAt);
+    if (totalMs !== undefined) ensureDurations(session).totalMs = totalMs;
     await persistArtifacts();
     emit({ type: "session.completed", session });
     return session;
@@ -697,6 +778,11 @@ export async function runGeneration(
     const message = err instanceof Error ? err.message : String(err);
     session.status = "error";
     session.error = message;
+    // Even on error we record wall-clock — an "it took 8 minutes to blow
+    // up in Finance" signal is often the most actionable data point.
+    session.endedAt = new Date().toISOString();
+    const totalMs = diffMs(session.createdAt, session.endedAt);
+    if (totalMs !== undefined) ensureDurations(session).totalMs = totalMs;
     await persistArtifacts();
     emit({ type: "session.error", message });
     throw err;

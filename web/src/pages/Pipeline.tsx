@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import { Markdown, Spinner, StatusPill } from "../sandbox";
 import {
@@ -7,10 +7,14 @@ import {
   DebateRounds,
   PIPELINE_WAVES,
   canonicalKindOrder,
+  computeLiveDuration,
   derivePipelineNodeStatus,
+  formatCompactDuration,
+  formatDuration,
 } from "../business";
 import {
   useCurrentSession,
+  useHistoryAverages,
   useLive,
   useConnectorActions,
   type DocumentArtifact,
@@ -23,12 +27,30 @@ import {
 export function PipelinePage() {
   const currentSession = useCurrentSession();
   const live = useLive();
+  const averages = useHistoryAverages();
   const { setTab, regenerate } = useConnectorActions();
 
   // Which artifact's debate trail is currently expanded. Only one at a
   // time — the user opens it explicitly by clicking a tile, which
   // matches the "hide verbose by default" ask.
   const [openKind, setOpenKind] = useState<DocumentKind | null>(null);
+
+  // Live wall-clock tick for the current-run duration and any in-flight
+  // per-team tiles. We only spin an interval while there's something
+  // still running (or an unfinished session) so completed sessions
+  // don't waste render budget.
+  const [now, setNow] = useState<number>(() => Date.now());
+  const sessionRunning =
+    currentSession?.status === "refining" ||
+    currentSession?.status === "locked" ||
+    currentSession?.status === "generating" ||
+    live.running ||
+    live.concepting;
+  useEffect(() => {
+    if (!sessionRunning) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [sessionRunning]);
 
   const teamByKind = useMemo(
     () =>
@@ -76,12 +98,19 @@ export function PipelinePage() {
   }
 
   const costs = currentSession.costs;
+  const durations = currentSession.durations;
   const showProgress =
     currentSession.status === "generating" ||
     currentSession.status === "locked" ||
     currentSession.status === "completed" ||
     live.running ||
     live.concepting;
+
+  // Elapsed for the run headline — prefer the server-stamped total once
+  // it's set (terminal state), otherwise wall-clock against the tick.
+  const runElapsedMs =
+    durations?.totalMs ??
+    computeLiveDuration(currentSession.createdAt, currentSession.endedAt ?? null, now);
 
   return (
     <div className="max-w-[1400px] mx-auto space-y-6">
@@ -123,6 +152,10 @@ export function PipelinePage() {
           totalUsd={costs?.total.estimatedUsd ?? 0}
           totalCalls={costs?.total.llmCalls ?? 0}
           usageComplete={costs?.usageComplete ?? true}
+          elapsedMs={runElapsedMs}
+          averageMs={averages?.session?.avgMs}
+          averageSamples={averages?.session?.samples}
+          live={sessionRunning}
         />
       )}
 
@@ -150,6 +183,16 @@ export function PipelinePage() {
                         liveDone: live.done,
                         liveErrors: live.errors,
                       });
+                      // Live duration: server-stamped when the stage
+                      // finished, otherwise wall-clock against the tick.
+                      const stageMs =
+                        artifact?.durationMs ??
+                        computeLiveDuration(
+                          artifact?.startedAt,
+                          artifact?.endedAt,
+                          now,
+                        );
+                      const teamAvg = averages?.perTeam?.[kind];
                       return (
                         <PipelineNode
                           key={kind}
@@ -161,6 +204,9 @@ export function PipelinePage() {
                           activeMembers={live.activeMembers[kind]}
                           error={live.errors[kind]}
                           cost={costs?.perTeam[kind]}
+                          durationMs={stageMs}
+                          averageMs={teamAvg?.avgMs}
+                          averageSamples={teamAvg?.samples}
                           selected={openKind === kind}
                           onOpen={() =>
                             setOpenKind((prev) => (prev === kind ? null : kind))
@@ -255,6 +301,10 @@ function ProgressBar({
   totalUsd,
   totalCalls,
   usageComplete,
+  elapsedMs,
+  averageMs,
+  averageSamples,
+  live,
 }: {
   pct: number;
   done: number;
@@ -265,6 +315,11 @@ function ProgressBar({
   totalUsd: number;
   totalCalls: number;
   usageComplete: boolean;
+  elapsedMs: number | null;
+  averageMs?: number;
+  averageSamples?: number;
+  /** Whether the run is still in flight (drives the "…" ticker). */
+  live: boolean;
 }) {
   const bar =
     status === "completed"
@@ -272,6 +327,14 @@ function ProgressBar({
       : errored > 0
         ? "bg-amber-500"
         : "bg-indigo-500";
+  const elapsedTitle =
+    elapsedMs !== null
+      ? (live ? "Running for " : "Total run time ") +
+        formatDuration(elapsedMs) +
+        (averageMs
+          ? ` · typical ${formatDuration(averageMs)} across ${averageSamples} completed run${averageSamples === 1 ? "" : "s"}`
+          : "")
+      : "";
   return (
     <div className="card p-4">
       <div className="flex items-baseline justify-between mb-2 gap-4 flex-wrap">
@@ -292,6 +355,21 @@ function ProgressBar({
           </span>
         </div>
         <div className="text-xs text-slate-600 flex items-center gap-3">
+          {elapsedMs !== null && (
+            <span title={elapsedTitle}>
+              {live ? "Elapsed" : "Ran for"}{" "}
+              <span className="font-mono text-slate-800">
+                {formatDuration(elapsedMs)}
+                {live && <span className="text-amber-600">…</span>}
+              </span>
+              {averageMs && (
+                <span className="text-slate-400">
+                  {" "}
+                  / avg {formatDuration(averageMs)}
+                </span>
+              )}
+            </span>
+          )}
           <span className="font-mono">{pct}%</span>
           {totalCalls > 0 && (
             <span className="text-slate-500">

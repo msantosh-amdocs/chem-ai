@@ -2,6 +2,7 @@ import type {
   ArchitectureSession,
   ClarifyAnswer,
   GenerationSettings,
+  HistoryAverages,
   HistorySummary,
   RefinementRound,
   SdkModel,
@@ -32,7 +33,14 @@ export const api = {
   ): Promise<{ models: SdkModel[]; cachedAt: string; warning?: string }> {
     return json(await fetch(`/api/models${refresh ? "?refresh=1" : ""}`));
   },
-  async listHistory(): Promise<{ sessions: HistorySummary[] }> {
+  async listHistory(): Promise<{
+    sessions: HistorySummary[];
+    /**
+     * Running averages across every terminal session on disk. Absent
+     * on older servers — callers must treat as optional.
+     */
+    averages?: HistoryAverages;
+  }> {
     return json(await fetch("/api/history"));
   },
   async getSession(id: string): Promise<{ session: ArchitectureSession }> {

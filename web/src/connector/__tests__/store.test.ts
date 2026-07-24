@@ -53,6 +53,7 @@ beforeEach(() => {
     draftAnswers: {},
     live: baseLive(),
     historyList: [],
+    historyAverages: null,
     eventSource: null,
     modelsError: null,
     models: [],
