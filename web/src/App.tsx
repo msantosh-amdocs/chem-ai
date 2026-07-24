@@ -6,6 +6,7 @@ import {
   useCurrentSession,
   useLive,
   useHealth,
+  useTabRouting,
 } from "./connector";
 import { NewIdeaPage } from "./pages/NewIdea";
 import { RefinePage } from "./pages/Refine";
@@ -22,6 +23,11 @@ export default function App() {
   const live = useLive();
   const health = useHealth();
   const { setTab, loadHealth, loadHistory, loadModels } = useConnectorActions();
+
+  // Two-way sync between `store.tab` and `window.location.pathname`
+  // so deep links like `/refine` restore the correct tab and every
+  // tab change updates the address bar.
+  useTabRouting();
 
   useEffect(() => {
     void loadHealth();

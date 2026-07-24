@@ -48,3 +48,12 @@ export {
   type StoreState,
 } from "./store";
 export * from "./hooks";
+export {
+  TAB_TO_PATH,
+  PATH_TO_TAB,
+  DEFAULT_TAB,
+  pathToTab,
+  tabToPath,
+  pathMatchesTab,
+} from "./paths";
+export { useTabRouting } from "./useTabRouting";

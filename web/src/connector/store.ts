@@ -28,6 +28,24 @@ import {
   type DocumentKind,
   type SpecialistPersona,
 } from "./personas";
+import { pathToTab } from "./paths";
+
+/**
+ * Resolve the initial tab from the browser URL at module-load time.
+ *
+ * Doing this *before* React renders (rather than in a mount `useEffect`)
+ * avoids a subtle StrictMode race: a hydrate-from-URL effect followed by
+ * a sync-to-URL effect can, on the initial mount, see a stale `tab`
+ * closure from the render that scheduled the hydrate — and then push
+ * the store's default path over the top of the user's deep link.
+ * Seeding the store from `window.location` sidesteps the whole problem:
+ * the very first render already reflects the URL, so the sync effect
+ * has nothing to do until the user changes tabs.
+ */
+function computeInitialTab(): Tab {
+  if (typeof window === "undefined") return "new";
+  return pathToTab(window.location.pathname);
+}
 
 export type Tab =
   | "new"
@@ -318,7 +336,7 @@ export function applyEvent(
 }
 
 export const useStore = create<StoreState>((set, get) => ({
-  tab: "new",
+  tab: computeInitialTab(),
   setTab: (t) => set({ tab: t }),
 
   health: null,
