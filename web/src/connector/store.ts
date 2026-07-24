@@ -43,19 +43,26 @@ import { pathToTab } from "./paths";
  * has nothing to do until the user changes tabs.
  */
 function computeInitialTab(): Tab {
-  if (typeof window === "undefined") return "new";
+  if (typeof window === "undefined") return "dashboard";
   return pathToTab(window.location.pathname);
 }
 
+/**
+ * Flat top-level tab identifier. The URL is the source of truth for
+ * *which* tab we're on; the store just mirrors it so components can
+ * bind to it. Session-scoped views (`session-*`) require a non-null
+ * `currentSession` — the routing hook handles loading the session for
+ * a deep link before it flips the tab.
+ */
 export type Tab =
-  | "new"
-  | "refine"
-  | "pipeline"
-  | "docs"
-  | "specialists"
-  | "settings"
-  | "history"
-  | "help";
+  | "dashboard"
+  | "new-idea"
+  | "help-team"
+  | "help-settings"
+  | "help-how-it-works"
+  | "session-refine"
+  | "session-pipeline"
+  | "session-documents";
 
 export interface LiveState {
   running: boolean;
@@ -212,7 +219,7 @@ export function applyEvent(
 
     case "concept.started":
       live.concepting = true;
-      nextTab = "pipeline";
+      nextTab = "session-pipeline";
       break;
     case "concept.completed":
       live.concepting = false;
@@ -321,7 +328,7 @@ export function applyEvent(
       live.running = false;
       live.concepting = false;
       live.refining = false;
-      nextTab = "docs";
+      nextTab = "session-documents";
       break;
     case "session.error":
       live.running = false;
@@ -391,9 +398,26 @@ export const useStore = create<StoreState>((set, get) => ({
       live.currentRound[a.kind] = a.rounds.length;
       live.latestAgreement[a.kind] = { ...a.finalAgreements };
     }
-    let nextTab: Tab = "refine";
-    if (session.status === "completed") nextTab = "docs";
-    else if (session.status === "generating" || session.status === "locked") nextTab = "pipeline";
+    // If the caller was already on a session sub-tab (typically because
+    // the URL parser set it before calling `openSession`), preserve their
+    // choice — otherwise we clobber a deep link like
+    // `/session/:id/pipeline` and force it to `/session/:id/documents`.
+    // Fresh entries (from Dashboard / list) come in on a non-session tab
+    // and get the smart status-based landing sub-tab.
+    const currentTab = get().tab;
+    const onSessionTab =
+      currentTab === "session-refine" ||
+      currentTab === "session-pipeline" ||
+      currentTab === "session-documents";
+    let nextTab: Tab;
+    if (onSessionTab) {
+      nextTab = currentTab;
+    } else {
+      nextTab = "session-refine";
+      if (session.status === "completed") nextTab = "session-documents";
+      else if (session.status === "generating" || session.status === "locked")
+        nextTab = "session-pipeline";
+    }
     set({ currentSession: session, draftAnswers: {}, live, tab: nextTab, eventSource: null });
   },
 
@@ -499,7 +523,7 @@ export const useStore = create<StoreState>((set, get) => ({
         set({
           live: {
             ...initialLive,
-            error: `${t.kind.toUpperCase()} team has ${t.members.length} member(s) — minimum is ${KIND_MIN_MEMBERS[t.kind]}. Add a specialist in the My Team tab.`,
+            error: `${t.kind.toUpperCase()} team has ${t.members.length} member(s) — minimum is ${KIND_MIN_MEMBERS[t.kind]}. Add a specialist in Help → My Team.`,
           },
         });
         return;
@@ -509,7 +533,7 @@ export const useStore = create<StoreState>((set, get) => ({
       currentSession: null,
       draftAnswers: {},
       live: { ...initialLive, running: true, refining: true },
-      tab: "refine",
+      tab: "session-refine",
     });
     try {
       const { sessionId, session } = await api.startSession({
@@ -602,7 +626,7 @@ export const useStore = create<StoreState>((set, get) => ({
     }));
     set({
       live: { ...get().live, concepting: true, running: true, error: null },
-      tab: "pipeline",
+      tab: "session-pipeline",
     });
     try {
       const { session } = await api.lockIdea(currentSession.id, answers, true);
@@ -628,7 +652,7 @@ export const useStore = create<StoreState>((set, get) => ({
     if (!currentSession) return;
     set({
       live: { ...initialLive, sessionId: currentSession.id, running: true },
-      tab: "pipeline",
+      tab: "session-pipeline",
     });
     openStream(currentSession.id, set, get);
     try {

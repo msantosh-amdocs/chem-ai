@@ -49,7 +49,7 @@ export function RefinePage() {
             <div className="font-medium mb-1">Couldn't start the session.</div>
             <div className="text-sm">{live.error}</div>
           </div>
-          <button className="btn btn-ghost" onClick={() => useStore.setState({ tab: "new" })}>
+          <button className="btn btn-ghost" onClick={() => useStore.setState({ tab: "new-idea" })}>
             ← Back to New Idea
           </button>
         </div>
@@ -232,7 +232,7 @@ export function RefinePage() {
             </div>
             <button
               className="btn btn-primary"
-              onClick={() => useStore.setState({ tab: "pipeline" })}
+              onClick={() => useStore.setState({ tab: "session-pipeline" })}
             >
               Watch the pipeline →
             </button>

@@ -652,7 +652,7 @@ function DebateLoop() {
       <figcaption className="text-xs text-slate-500 mt-2 text-center">
         Debate loop — 2-5 specialists per department iterate to a self-reported
         consensus. The threshold (default 95%) and max rounds (default 4) are
-        editable on the My Team tab.
+        editable under Help → My Team.
       </figcaption>
     </figure>
   );
@@ -854,7 +854,7 @@ export function HowItWorksPage() {
             <span className="font-semibold text-slate-900">
               Want to re-run one department?
             </span>{" "}
-            Open the session from <em>History</em>, then click <em>Regenerate</em>{" "}
+            Open the session from the <em>Dashboard</em>, then click <em>Regenerate</em>{" "}
             on the department card in <em>Pipeline</em>.
           </p>
         </div>

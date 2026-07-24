@@ -57,7 +57,7 @@ const mathBlockExtension: TokenizerAndRendererExtension = {
     };
   },
   renderer(token) {
-    const src = String((token as { text: string }).text);
+    const src = String((token as unknown as { text: string }).text);
     return `<div class="md-math md-math-block" data-math="${escapeMathAttr(src)}"></div>\n`;
   },
 };
@@ -100,7 +100,7 @@ const mathInlineExtension: TokenizerAndRendererExtension = {
     };
   },
   renderer(token) {
-    const t = token as { text: string; display?: boolean };
+    const t = token as unknown as { text: string; display?: boolean };
     const cls = t.display
       ? "md-math md-math-inline-display"
       : "md-math md-math-inline";

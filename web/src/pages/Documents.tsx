@@ -94,7 +94,7 @@ export function DocumentsPage() {
             {ALL.filter((k) => artByKind.get(k)?.content).length} of{" "}
             {teamByKind.size} artifacts produced ·{" "}
             <button
-              onClick={() => setTab("pipeline")}
+              onClick={() => setTab("session-pipeline")}
               className="text-slate-700 underline underline-offset-2 hover:text-slate-900"
             >
               back to pipeline

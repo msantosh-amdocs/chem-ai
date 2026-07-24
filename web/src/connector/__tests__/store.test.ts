@@ -48,7 +48,7 @@ function baseLive(): LiveState {
 beforeEach(() => {
   localStorage.clear();
   useStore.setState({
-    tab: "new",
+    tab: "dashboard",
     currentSession: null,
     draftAnswers: {},
     live: baseLive(),
@@ -134,7 +134,7 @@ describe("applyEvent (pure reducer)", () => {
       { type: "concept.started" },
     );
     expect(out.live.concepting).toBe(true);
-    expect(out.nextTab).toBe("pipeline");
+    expect(out.nextTab).toBe("session-pipeline");
   });
 
   it("adds a streaming artifact placeholder on artifact.started", () => {
@@ -191,7 +191,7 @@ describe("applyEvent (pure reducer)", () => {
       { type: "session.completed", session: finished },
     );
     expect(out.live.running).toBe(false);
-    expect(out.nextTab).toBe("docs");
+    expect(out.nextTab).toBe("session-documents");
     expect(out.session).toBe(finished);
   });
 

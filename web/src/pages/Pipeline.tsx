@@ -9,7 +9,6 @@ import {
   canonicalKindOrder,
   computeLiveDuration,
   derivePipelineNodeStatus,
-  formatCompactDuration,
   formatDuration,
 } from "../business";
 import {
@@ -133,7 +132,7 @@ export function PipelinePage() {
               <button className="btn btn-ghost" onClick={regenerate}>
                 ↻ Regenerate
               </button>
-              <button className="btn btn-primary" onClick={() => setTab("docs")}>
+              <button className="btn btn-primary" onClick={() => setTab("session-documents")}>
                 Read documents →
               </button>
             </>

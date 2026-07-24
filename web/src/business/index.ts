@@ -6,6 +6,7 @@
  * - Must NOT call `fetch`, `EventSource`, `WebSocket`, `setInterval` etc.
  */
 export { TopNav } from "./TopNav";
+export { SessionShell } from "./SessionShell";
 export { SpecialistEditor } from "./SpecialistEditor";
 export { SpecialistAvatar } from "./SpecialistAvatar";
 export { PipelineNode } from "./PipelineNode";

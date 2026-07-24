@@ -49,11 +49,15 @@ export {
 } from "./store";
 export * from "./hooks";
 export {
-  TAB_TO_PATH,
-  PATH_TO_TAB,
   DEFAULT_TAB,
-  pathToTab,
-  tabToPath,
+  canonicalUrlForTab,
+  isHelpTab,
+  isSessionTab,
   pathMatchesTab,
+  pathToRoute,
+  pathToTab,
+  routeToPath,
+  tabToPath,
 } from "./paths";
+export type { Route, SessionSub, SessionTab, StaticTab } from "./paths";
 export { useTabRouting } from "./useTabRouting";
