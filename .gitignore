@@ -1,10 +1,46 @@
+# ── Dependencies & builds ────────────────────────────────────────────────
 node_modules/
 dist/
-.data/
-.env
-.env.local
+build/
 .vite/
-.DS_Store
+.turbo/
+.next/
+.cache/
+*.tsbuildinfo
+
+# ── Runtime state (session history, uploaded artefacts, etc.) ────────────
+.data/
+
+# ── Env & secrets ────────────────────────────────────────────────────────
+# Ignore ALL .env variants anywhere in the repo (root, server/, web/, …)
+.env
+.env.*
+**/.env
+**/.env.*
+# …but keep the committed example so contributors can copy it locally.
+!.env.example
+!**/.env.example
+
+# ── Logs ─────────────────────────────────────────────────────────────────
 *.log
 .logs/
-*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Test / coverage output ───────────────────────────────────────────────
+coverage/
+*.lcov
+.nyc_output/
+
+# ── Editor & OS metadata ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.swp
+*.swo

@@ -324,26 +324,45 @@ RULES
    ### 2.1 Chosen Route
    ### 2.2 Alternative Routes Considered (1-2, with reason rejected)
    ### 2.3 Chemical Reaction Scheme
-       Provide the reaction scheme as text (arrow notation) AND as a
-       Mermaid \`graph LR\` diagram. The diagram MUST be inside a fenced
-       code block whose opening line is exactly three backticks followed
-       by the word \`mermaid\` (no spaces, no colon) and whose closing
-       line is exactly three backticks on their own line. Do NOT emit the
-       diagram as plain text, an indented block, or with just the word
-       "mermaid" on its own line — the UI will only render diagrams
-       inside a proper \`\`\`mermaid …\`\`\` fence. Use one node per
-       intermediate and label every edge with reagent/conditions.
-       Any node label that contains parentheses, colons, commas, slashes,
-       pipes or angle brackets MUST be wrapped in double quotes — mermaid's
-       lexer treats an unquoted \`(\` inside \`[…]\` as an alternate node
-       shape and will fail to parse the diagram otherwise. Prefer quoting
-       every label defensively.
-       Example (structure, not content):
-           \`\`\`mermaid
-           graph LR
-             A["Feed compound"] -->|"reagent, T, P"| B["Intermediate"]
-             B --> C["Final product"]
-           \`\`\`
+       Provide the reaction scheme in three parallel forms so the reader
+       has plain-text fallback, a rendered flow diagram, AND properly
+       typeset stoichiometric equations:
+
+       (a) Text arrow notation for quick scan, e.g.
+              "3-methylpyridine → 3-(trichloromethyl)pyridine → 2,3-DCTF".
+
+       (b) A Mermaid \`graph LR\` diagram of the same route. The diagram
+           MUST be inside a fenced code block whose opening line is
+           exactly three backticks followed by the word \`mermaid\` (no
+           spaces, no colon) and whose closing line is exactly three
+           backticks on their own line. Do NOT emit the diagram as plain
+           text, an indented block, or with just the word "mermaid" on
+           its own line. Use one node per intermediate and label every
+           edge with reagent/conditions. Any node label that contains
+           parentheses, colons, commas, slashes, pipes or angle brackets
+           MUST be wrapped in double quotes — mermaid's lexer treats an
+           unquoted \`(\` inside \`[…]\` as an alternate node shape and
+           will fail to parse the diagram otherwise. Prefer quoting
+           every label defensively.
+           Example (structure, not content):
+               \`\`\`mermaid
+               graph LR
+                 A["Feed compound"] -->|"reagent, T, P"| B["Intermediate"]
+                 B --> C["Final product"]
+               \`\`\`
+
+       (c) Every balanced stoichiometric equation for each step, written
+           as LaTeX using the mhchem package inside math delimiters so
+           the UI can typeset it properly. Use \`$$…$$\` (a whole line)
+           for display equations and \`$…$\` for inline mentions inside
+           prose. Do NOT emit the equation as plain text such as
+           "CH4 + 2 O2 -> CO2 + 2 H2O" — use \`\\ce{…}\` inside math.
+           Example (structure, not content):
+               $$\\ce{CH4 + 2 O2 -> CO2 + 2 H2O}$$
+               Reaction enthalpy: $\\Delta H_{\\text{rxn}} \\approx -890\\,\\text{kJ/mol}$.
+           Use mhchem's arrow forms (\`->\`, \`<=>\`, \`<->\`), phase
+           labels (e.g. \`(g)\`, \`(l)\`, \`(s)\`, \`(aq)\`), catalysts
+           (\`->[H2SO4]\`), and units via \`\\pu{…}\` where relevant.
    ### 2.4 Key Intermediates
        Table: Intermediate | CAS# (if known) | Role | Criticality.
 

@@ -136,6 +136,65 @@
   margin-bottom: 0.4em;
   font-family: "SFMono-Regular", Menlo, monospace;
 }
+
+/*
+ * LaTeX math rendered client-side from `$…$` / `$$…$$` blocks (KaTeX).
+ * The `md-math` placeholder starts life invisible so users don't see
+ * the raw TeX flash on screen before KaTeX finishes hydrating; the
+ * `.md-math-rendered` marker set from `Markdown.tsx` after render
+ * removes the visibility gate. Block math also gets a bit of vertical
+ * breathing room to sit as its own visual paragraph.
+ */
+.md .md-math {
+  /* Hide raw placeholder until KaTeX populates the node (or it errors). */
+  visibility: hidden;
+}
+.md .md-math.md-math-rendered,
+.md .md-math.md-math-error {
+  visibility: visible;
+}
+.md .md-math-block {
+  display: block;
+  overflow-x: auto;
+  margin: 0.75em 0;
+  padding: 0.35em 0.5em;
+  text-align: center;
+}
+.md .md-math-inline,
+.md .md-math-inline-display {
+  display: inline-block;
+  vertical-align: middle;
+}
+.md .md-math-inline-display {
+  /* When display math ends up inside a paragraph, KaTeX still needs a
+   * bit of room around it — otherwise it collides with the surrounding
+   * line-height in prose. */
+  padding: 0 0.15em;
+}
+.md .md-math-error {
+  color: #7f1d1d;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+  font-family: "SFMono-Regular", Menlo, monospace;
+  font-size: 0.9em;
+}
+.md .md-math-error code {
+  background: transparent;
+  color: inherit;
+}
+/*
+ * KaTeX auto-injects `.katex-display` at block scope. Center it and let
+ * it scroll horizontally on narrow viewports so a wide equation doesn't
+ * force layout shift on the surrounding column.
+ */
+.md .katex-display {
+  margin: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .md blockquote {
   border-left: 3px solid #cbd5e1;
   padding-left: 0.9em;

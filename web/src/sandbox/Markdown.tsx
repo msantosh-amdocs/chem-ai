@@ -1,7 +1,158 @@
 import { useEffect, useMemo, useRef } from "react";
-import { marked } from "marked";
+import { marked, type TokenizerAndRendererExtension } from "marked";
 
 marked.setOptions({ gfm: true, breaks: true });
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * LaTeX math extensions — KaTeX + mhchem for chemical equations
+ *
+ * We register two extensions with marked's tokenizer:
+ *   - a block-level `$$…$$` handler emitting `<div class="md-math …" data-math="…">`
+ *   - an inline-level `$…$` (and `$$…$$` if wedged inside text) handler emitting
+ *     `<span class="md-math …" data-math="…">`
+ *
+ * Emitting placeholder elements (rather than immediately calling katex) keeps
+ * `marked.parse` synchronous AND avoids double-escaping — the actual KaTeX
+ * render happens in the same `useEffect` we already run for mermaid, so we
+ * only pay the ~250 KB gzipped cost when a document actually contains math.
+ *
+ * Rules mirror MathJax's defaults so LLM output that follows the standard
+ * conventions "just works":
+ *   - `$foo$` must NOT begin or end with whitespace inside the delimiters
+ *   - closing `$` may NOT be followed by a digit (so "$100 to $200" is prose)
+ *   - a `\$` escape suppresses the delimiter (so authors can print literal $)
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** Encode a math source string so it survives round-tripping through an
+ *  HTML attribute. We only need to defuse the five characters the HTML
+ *  parser reacts to; everything else in LaTeX (`\`, `{`, `}`, `_`, `^`, …)
+ *  is attribute-safe. */
+function escapeMathAttr(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "&#10;");
+}
+
+const mathBlockExtension: TokenizerAndRendererExtension = {
+  name: "mathBlock",
+  level: "block",
+  start(src: string) {
+    const idx = src.indexOf("$$");
+    return idx < 0 ? undefined : idx;
+  },
+  tokenizer(src: string) {
+    // Block form: `$$ … $$` on its own paragraph. We tolerate leading
+    // whitespace and a trailing newline (or end-of-input) so the block
+    // stands cleanly outside surrounding markdown flow.
+    const rule = /^\s*\$\$([\s\S]+?)\$\$\s*(?:\n|$)/;
+    const match = rule.exec(src);
+    if (!match) return undefined;
+    return {
+      type: "mathBlock",
+      raw: match[0],
+      text: match[1]!.trim(),
+    };
+  },
+  renderer(token) {
+    const src = String((token as { text: string }).text);
+    return `<div class="md-math md-math-block" data-math="${escapeMathAttr(src)}"></div>\n`;
+  },
+};
+
+const mathInlineExtension: TokenizerAndRendererExtension = {
+  name: "mathInline",
+  level: "inline",
+  start(src: string) {
+    // Fast-path: skip any run that clearly has no `$` at all so marked
+    // doesn't invoke the tokenizer for every inline token.
+    const idx = src.search(/(?<!\\)\$/);
+    return idx < 0 ? undefined : idx;
+  },
+  tokenizer(src: string) {
+    // Prefer `$$…$$` (display within text) over `$…$` so we don't split
+    // a display expression into two half-inline ones.
+    const displayRule = /^\$\$([\s\S]+?)\$\$/;
+    const displayMatch = displayRule.exec(src);
+    if (displayMatch) {
+      return {
+        type: "mathInline",
+        raw: displayMatch[0],
+        text: displayMatch[1]!.trim(),
+        display: true,
+      };
+    }
+    // Inline `$…$`:
+    //   `(?=\S)`   — first char after `$` is non-whitespace
+    //   `[^$\n]+?` — content, no `$` inside, single-line
+    //   `(?<=\S)`  — last char before closing `$` is non-whitespace
+    //   `(?!\d)`   — closing `$` not followed by a digit (avoid "$5")
+    const inlineRule = /^\$(?=\S)([^$\n]+?)(?<=\S)\$(?!\d)/;
+    const inlineMatch = inlineRule.exec(src);
+    if (!inlineMatch) return undefined;
+    return {
+      type: "mathInline",
+      raw: inlineMatch[0],
+      text: inlineMatch[1]!.trim(),
+      display: false,
+    };
+  },
+  renderer(token) {
+    const t = token as { text: string; display?: boolean };
+    const cls = t.display
+      ? "md-math md-math-inline-display"
+      : "md-math md-math-inline";
+    return `<span class="${cls}" data-math="${escapeMathAttr(t.text)}"></span>`;
+  },
+};
+
+marked.use({ extensions: [mathBlockExtension, mathInlineExtension] });
+
+/**
+ * KaTeX API shape we actually use — kept intentionally narrow so
+ * the surrounding code doesn't reach into katex internals.
+ */
+type KatexApi = {
+  renderToString: (
+    src: string,
+    options?: {
+      displayMode?: boolean;
+      throwOnError?: boolean;
+      strict?: "error" | "warn" | "ignore" | ((...args: unknown[]) => string);
+      trust?: boolean;
+      output?: "html" | "mathml" | "htmlAndMathml";
+      macros?: Record<string, string>;
+    },
+  ) => string;
+};
+
+let katexPromise: Promise<KatexApi> | null = null;
+/**
+ * Lazily fetch KaTeX + the mhchem extension + its stylesheet exactly
+ * once per page load. Chemistry-heavy pages import ~250 KB gzipped for
+ * this, which is why the load is deferred until we know at least one
+ * math placeholder is on screen. The dynamic CSS import lets Vite
+ * code-split the stylesheet into the same async chunk.
+ */
+async function getKatex(): Promise<KatexApi> {
+  if (!katexPromise) {
+    katexPromise = (async () => {
+      const [katexMod] = await Promise.all([
+        import("katex"),
+        // Side-effectful import that augments the KaTeX loaded above
+        // with `\ce{…}` and `\pu{…}` support for chemistry notation.
+        import("katex/contrib/mhchem"),
+        // CSS is loaded via a side-effectful import so Vite bundles it
+        // into the same lazy chunk and injects it when needed.
+        import("katex/dist/katex.min.css") as unknown as Promise<unknown>,
+      ]);
+      return (katexMod.default ?? katexMod) as unknown as KatexApi;
+    })();
+  }
+  return katexPromise;
+}
 
 interface Props {
   /** Backward-compatible: either `text` or `source` may be used. */
@@ -250,7 +401,10 @@ export function Markdown({ text, source }: Props) {
     const codeBlocks = Array.from(
       container.querySelectorAll<HTMLElement>("pre > code.language-mermaid"),
     );
-    if (!codeBlocks.length) return;
+    const mathNodes = Array.from(
+      container.querySelectorAll<HTMLElement>(".md-math[data-math]"),
+    );
+    if (!codeBlocks.length && !mathNodes.length) return;
 
     let cancelled = false;
     // Ids generated during THIS effect run. Cleaned up on unmount so we
@@ -262,7 +416,68 @@ export function Markdown({ text, source }: Props) {
     // deep inside mermaid.
     const ownedIds: string[] = [];
     (async () => {
-      const mermaid = await getMermaid();
+      // Kick off both module loads in parallel — they're independent and
+      // both have real network cost. `Promise.all` bails early on either
+      // failure, but that's what we want: if KaTeX can't load we should
+      // still get mermaid, so we branch per-block below rather than
+      // gating on one composite await.
+      const mermaidPromiseLocal = codeBlocks.length ? getMermaid() : null;
+      const katexPromiseLocal = mathNodes.length ? getKatex() : null;
+
+      // Math renders first because they're purely synchronous once the
+      // module resolves, and mermaid renders can take hundreds of ms
+      // each — showing chemistry equations immediately gives a better
+      // perceived load even if the diagrams are still spinning up.
+      if (katexPromiseLocal) {
+        try {
+          const katex = await katexPromiseLocal;
+          if (cancelled) return;
+          for (const el of mathNodes) {
+            const src = el.getAttribute("data-math") ?? "";
+            if (!src) continue;
+            const display =
+              el.classList.contains("md-math-block") ||
+              el.classList.contains("md-math-inline-display");
+            try {
+              el.innerHTML = katex.renderToString(src, {
+                displayMode: display,
+                throwOnError: true,
+                strict: "ignore",
+                trust: false,
+                output: "htmlAndMathml",
+              });
+              // Mark the node so CSS can style rendered math distinctly
+              // from unrendered placeholders (which briefly appear
+              // before hydration on first paint).
+              el.classList.add("md-math-rendered");
+            } catch (err) {
+              el.classList.add("md-math-error");
+              // Show the raw TeX in a code tag so the reader can still
+              // decode what was meant, and stash the katex parser
+              // message in the title for hover-diagnostics.
+              const code = document.createElement("code");
+              code.textContent = src;
+              el.innerHTML = "";
+              el.appendChild(code);
+              el.title = `Math render failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`;
+            }
+          }
+        } catch (err) {
+          // KaTeX module itself failed to load — leave placeholders
+          // in place but mark them so CSS can render a hint.
+          for (const el of mathNodes) {
+            el.classList.add("md-math-error");
+            el.title = `KaTeX failed to load: ${
+              err instanceof Error ? err.message : String(err)
+            }`;
+          }
+        }
+      }
+
+      if (!mermaidPromiseLocal) return;
+      const mermaid = await mermaidPromiseLocal;
       if (cancelled) return;
       for (const codeEl of codeBlocks) {
         const preEl = codeEl.parentElement as HTMLElement | null;

@@ -41,6 +41,63 @@ describe("<Markdown>", () => {
     expect(code).not.toBeNull();
     expect(code!.textContent).toContain("graph LR");
   });
+
+  it("renders a block math `$$…$$` as a .md-math-block placeholder carrying the TeX source in data-math", () => {
+    const src = [
+      "Chemistry:",
+      "",
+      "$$\\ce{CH4 + 2 O2 -> CO2 + 2 H2O}$$",
+      "",
+      "Rest of the text.",
+    ].join("\n");
+    const { container } = render(<Markdown source={src} />);
+    const block = container.querySelector<HTMLDivElement>(
+      "div.md-math.md-math-block",
+    );
+    expect(block).not.toBeNull();
+    // Attribute round-trips as decoded text — `-&gt;` etc. is un-escaped.
+    expect(block!.getAttribute("data-math")).toBe(
+      "\\ce{CH4 + 2 O2 -> CO2 + 2 H2O}",
+    );
+  });
+
+  it("renders inline `$…$` math as a .md-math-inline placeholder", () => {
+    const src = "The enthalpy is $\\Delta H = -890$ kJ/mol.";
+    const { container } = render(<Markdown source={src} />);
+    const inline = container.querySelector<HTMLSpanElement>(
+      "span.md-math.md-math-inline",
+    );
+    expect(inline).not.toBeNull();
+    expect(inline!.getAttribute("data-math")).toBe("\\Delta H = -890");
+  });
+
+  it("does NOT treat currency-like `$5` or `$100 to $200` as math", () => {
+    const src = "The price is $100 to $200 per unit — that's about $5 apiece.";
+    const { container } = render(<Markdown source={src} />);
+    expect(container.querySelector(".md-math")).toBeNull();
+    // Dollar signs remain in the rendered prose.
+    expect(container.textContent).toContain("$100");
+    expect(container.textContent).toContain("$200");
+    expect(container.textContent).toContain("$5");
+  });
+
+  it("does NOT convert `$…$` that spans a newline (guard against runaway matches)", () => {
+    const src = "First $ then a newline\ncontinues $ done.";
+    const { container } = render(<Markdown source={src} />);
+    expect(container.querySelector(".md-math")).toBeNull();
+  });
+
+  it("HTML-escapes the TeX source in the placeholder attribute so `>` / `&` can't break out", () => {
+    const src = "$$\\ce{A + B -> C & D}$$";
+    const { container } = render(<Markdown source={src} />);
+    const block = container.querySelector<HTMLDivElement>(".md-math-block");
+    expect(block).not.toBeNull();
+    // getAttribute returns decoded text — the round-trip proves that the
+    // raw HTML attribute in the innerHTML wasn't malformed.
+    expect(block!.getAttribute("data-math")).toBe("\\ce{A + B -> C & D}");
+    // And the placeholder is not accidentally injected as sibling text.
+    expect(container.textContent?.trim()).toBe("");
+  });
 });
 
 describe("normalizeMermaidFences", () => {
