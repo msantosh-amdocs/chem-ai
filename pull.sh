@@ -84,7 +84,7 @@ if ! git remote get-url "$REMOTE" >/dev/null 2>&1; then
   git remote -v || true
   exit 1
 fi
-ok "Remote $REMOTE → $(git remote get-url "$REMOTE")"
+ok "Remote ${REMOTE} → $(git remote get-url "$REMOTE")"
 
 # Determine target branch.
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
@@ -105,6 +105,32 @@ ok "On branch $BRANCH"
 
 # Uncommitted-changes guard.
 DID_STASH=0
+
+# Safety net: if we stashed and something exits us early (unbound var, network
+# error, Ctrl-C, rebase-abort), restore the stash automatically — unless the
+# repo is mid-rebase/merge, in which case the pop would clobber the conflict.
+_restore_stash_on_exit() {
+  local rc=$?
+  set +eu
+  if [ "${DID_STASH:-0}" = "1" ]; then
+    local rebase_merge rebase_apply
+    rebase_merge="$(git rev-parse --git-path rebase-merge 2>/dev/null || echo "")"
+    rebase_apply="$(git rev-parse --git-path rebase-apply 2>/dev/null || echo "")"
+    if { [ -n "$rebase_merge" ] && [ -d "$rebase_merge" ]; } \
+       || { [ -n "$rebase_apply" ] && [ -d "$rebase_apply" ]; }; then
+      warn "Rebase in progress — stash left saved (see 'git stash list')."
+    else
+      warn "Auto-restoring stash on exit (rc=$rc)"
+      git stash pop || warn "Stash pop had conflicts — resolve, then 'git stash drop'."
+    fi
+    DID_STASH=0
+  fi
+  exit "$rc"
+}
+trap _restore_stash_on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 if ! git diff --quiet || ! git diff --cached --quiet; then
   if [ "$STASH_WIP" = "1" ]; then
     info "Stashing local changes (WIP · $(date +%H:%M:%S))"
@@ -119,7 +145,7 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 # Fetch first (so we can report what's incoming), then integrate.
-info "Fetching $REMOTE…"
+info "Fetching ${REMOTE}…"
 git fetch --prune "$REMOTE"
 
 BEFORE_SHA="$(git rev-parse HEAD)"
@@ -127,7 +153,6 @@ REMOTE_REF="$REMOTE/$BRANCH"
 
 if ! git rev-parse --verify "$REMOTE_REF" >/dev/null 2>&1; then
   fail "Remote branch $REMOTE_REF does not exist."
-  [ "$DID_STASH" = "1" ] && { warn "Restoring stash"; git stash pop || true; }
   exit 1
 fi
 
@@ -137,7 +162,11 @@ info "Local is ${B}$OUTGOING${R} commit(s) ahead, ${B}$INCOMING${R} behind $REMO
 
 if [ "$INCOMING" = "0" ]; then
   ok "Already up to date."
-  [ "$DID_STASH" = "1" ] && { info "Restoring stash"; git stash pop || warn "stash pop had conflicts — resolve manually"; }
+  if [ "$DID_STASH" = "1" ]; then
+    info "Restoring stash"
+    git stash pop || warn "Stash pop had conflicts — resolve manually."
+    DID_STASH=0
+  fi
   exit 0
 fi
 
@@ -146,21 +175,22 @@ printf "\n${DIM}Incoming commits:${R}\n"
 git --no-pager log --oneline --decorate --color=always "HEAD..$REMOTE_REF" | sed 's/^/  /'
 printf "\n"
 
-# Integrate.
+# Integrate. We already stashed manually when --stash-wip was passed, so
+# --autostash is a no-op on the normal path; keep it as a belt-and-braces for
+# anything that slipped past the guard.
 if [ "$MODE" = "rebase" ]; then
   info "Pulling with --rebase --autostash"
   if ! git pull --rebase --autostash "$REMOTE" "$BRANCH"; then
     fail "Rebase produced conflicts. Resolve them, then:"
     printf "  git add <files>\n  git rebase --continue\n"
     printf "or abort with:\n  git rebase --abort\n"
-    [ "$DID_STASH" = "1" ] && warn "Your stashed changes are still in 'git stash list'."
+    # Trap won't pop mid-rebase; caller must pop after resolving.
     exit 1
   fi
 else
   info "Pulling with --ff (merge on divergence)"
   if ! git pull --ff "$REMOTE" "$BRANCH"; then
     fail "Merge produced conflicts. Resolve them, then commit."
-    [ "$DID_STASH" = "1" ] && warn "Your stashed changes are still in 'git stash list'."
     exit 1
   fi
 fi
@@ -174,6 +204,7 @@ if [ "$DID_STASH" = "1" ]; then
   else
     warn "Stash pop had conflicts — resolve, then 'git stash drop' when done."
   fi
+  DID_STASH=0
 fi
 
 # Summary.
