@@ -184,6 +184,7 @@ describe("applyEvent (pure reducer)", () => {
         memberIds: ["m1", "m2"],
         leadId: "m1",
         title: "Market Analysis",
+        revisionCycle: 1,
       },
     );
     expect(out.live.generating.has("market")).toBe(true);
@@ -192,7 +193,7 @@ describe("applyEvent (pure reducer)", () => {
     expect(out.session?.status).toBe("generating");
   });
 
-  it("clears generating and marks done on artifact.completed", () => {
+  it("clears generating but does NOT mark done on artifact.completed (approval gate)", () => {
     const live = baseLive();
     live.generating.add("market");
     const artifact = {
@@ -211,7 +212,100 @@ describe("applyEvent (pure reducer)", () => {
       { type: "artifact.completed", artifact },
     );
     expect(out.live.generating.has("market")).toBe(false);
+    // Debate ending is not the same as being "done" any more — the
+    // department only counts as done once the user has approved. The
+    // subsequent `artifact.awaiting_approval` event moves the tile
+    // into the approve/revise state.
+    expect(out.live.done.has("market")).toBe(false);
+  });
+
+  it("moves artifact into awaiting_approval and pauses the session", () => {
+    const live = baseLive();
+    live.generating.add("market");
+    const artifact = {
+      kind: "market" as const,
+      title: "Market Analysis",
+      producedBy: "m1",
+      content: "final",
+      createdAt: "",
+      streaming: false,
+      rounds: [{ n: 1, drafts: [], startedAt: "", endedAt: "" }],
+      terminatedBy: "agreement" as const,
+      finalAgreements: {},
+    };
+    const out = applyEvent(
+      { session: baseSession(), live },
+      { type: "artifact.awaiting_approval", kind: "market", artifact },
+    );
+    expect(out.live.awaitingApproval.has("market")).toBe(true);
+    expect(out.session?.status).toBe("awaiting_user");
+    expect(out.session?.artifacts[0]?.approvalStatus).toBe("awaiting_approval");
+  });
+
+  it("promotes an artifact to done on artifact.approved", () => {
+    const live = baseLive();
+    live.awaitingApproval.add("market");
+    const artifact = {
+      kind: "market" as const,
+      title: "Market Analysis",
+      producedBy: "m1",
+      content: "final",
+      createdAt: "",
+      streaming: false,
+      rounds: [{ n: 1, drafts: [], startedAt: "", endedAt: "" }],
+      terminatedBy: "agreement" as const,
+      finalAgreements: {},
+      approvalStatus: "approved" as const,
+    };
+    const out = applyEvent(
+      { session: baseSession(), live },
+      { type: "artifact.approved", kind: "market", artifact },
+    );
+    expect(out.live.awaitingApproval.has("market")).toBe(false);
     expect(out.live.done.has("market")).toBe(true);
+    expect(out.session?.artifacts[0]?.approvalStatus).toBe("approved");
+  });
+
+  it("collects mid-run clarification requests and pauses the session", () => {
+    const out = applyEvent(
+      {
+        session: {
+          ...baseSession(),
+          artifacts: [
+            {
+              kind: "market",
+              title: "Market Analysis",
+              content: "",
+              producedBy: "m1",
+              createdAt: "",
+              streaming: true,
+              rounds: [],
+              finalAgreements: {},
+              approvalStatus: "generating",
+            },
+          ],
+        },
+        live: baseLive(),
+      },
+      {
+        type: "artifact.clarification.requested",
+        kind: "market",
+        requests: [
+          {
+            id: "c1",
+            kind: "market",
+            memberId: "m1",
+            question: "Which region should we prioritise first?",
+            round: 1,
+            askedAt: "",
+          },
+        ],
+      },
+    );
+    expect(out.live.awaitingClarification.has("market")).toBe(true);
+    expect(out.session?.status).toBe("awaiting_user");
+    expect(out.session?.artifacts[0]?.approvalStatus).toBe("awaiting_clarification");
+    expect(out.session?.artifacts[0]?.clarifications?.length).toBe(1);
   });
 
   it("records artifact errors without throwing", () => {

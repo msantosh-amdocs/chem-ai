@@ -261,6 +261,73 @@ export interface StageRound {
   endedAt: string;
 }
 
+/**
+ * User-approval lifecycle for a single department's artifact. The
+ * per-department gate lets the user validate each artifact before the
+ * pipeline advances to the next department; if the user isn't
+ * satisfied they can revise (adds their feedback back into the debate
+ * prompts) and the department re-runs.
+ *
+ *   not_started       — the department hasn't been kicked off yet
+ *   generating        — the debate is running (round 1..N)
+ *   awaiting_clarification — the department paused after round 1 to
+ *                       ask the user follow-up questions before
+ *                       continuing the debate
+ *   awaiting_approval — final draft is ready; user must Approve or Revise
+ *   approved          — the user accepted this draft; pipeline advances
+ *   revising          — the user asked for a revision; a new debate run
+ *                       is being scheduled
+ *   error             — the department failed
+ */
+export type ArtifactApprovalStatus =
+  | "not_started"
+  | "generating"
+  | "awaiting_clarification"
+  | "awaiting_approval"
+  | "approved"
+  | "revising"
+  | "error";
+
+/**
+ * A clarifying question raised BY a department member DURING its debate
+ * (typically at the end of round 1, when the concept is still ambiguous
+ * enough that the debate can't converge without more information from
+ * the user). Different from the analyst's up-front `ClarifyQuestion`
+ * only in that these are asked mid-generation and their answers get
+ * injected into subsequent debate rounds.
+ */
+export interface ClarificationRequest {
+  id: string;
+  /** Which department raised it. */
+  kind: DocumentKind;
+  /** Specialist.id of the member who raised it. */
+  memberId: string;
+  question: string;
+  /** One-sentence rationale for why the answer is needed. */
+  whyItMatters?: string;
+  /** Round number the request was raised in (usually 1). */
+  round: number;
+  askedAt: string;
+}
+
+/** The user's answer to one `ClarificationRequest`. */
+export interface ClarificationAnswer {
+  requestId: string;
+  answer: string;
+  answeredAt: string;
+}
+
+/**
+ * One revision cycle triggered by the user on a specific artifact.
+ * Stored on `DocumentArtifact.revisions` so the user can see the full
+ * history of "here's what I asked to change" alongside the artifact.
+ */
+export interface UserRevisionRequest {
+  n: number;
+  feedback: string;
+  requestedAt: string;
+}
+
 export interface DocumentArtifact {
   kind: DocumentKind;
   title: string;
@@ -296,12 +363,55 @@ export interface DocumentArtifact {
    * ISO strings for every render.
    */
   durationMs?: number;
+
+  /**
+   * Per-department user-approval state. Optional for backward
+   * compatibility with sessions written before the approval gate
+   * existed — undefined is treated as `not_started` when the
+   * artifact is empty, otherwise `approved` (legacy runs auto-
+   * accepted every stage).
+   */
+  approvalStatus?: ArtifactApprovalStatus;
+  /**
+   * ISO timestamp of when the user hit "Approve". Only set on
+   * artifacts that have been explicitly approved through the gate.
+   */
+  approvedAt?: string;
+  /**
+   * Ordered history of user revision requests on this artifact.
+   * Empty means the user accepted the first draft on the first pass.
+   * The department's prompts inject the LATEST feedback so subsequent
+   * regenerations converge on what the user asked for.
+   */
+  revisions?: UserRevisionRequest[];
+  /**
+   * Convenience — `revisions.length`. Persisted so the client
+   * doesn't have to re-count on every render.
+   */
+  revisionCount?: number;
+  /**
+   * All clarification questions the department has ever raised for
+   * this artifact. Includes both pending (unanswered) and resolved
+   * ones. Sorted by `askedAt`.
+   */
+  clarifications?: ClarificationRequest[];
+  /** User-supplied answers, matched to `clarifications` by `requestId`. */
+  clarificationAnswers?: ClarificationAnswer[];
 }
 
+/**
+ * Overall session lifecycle. `awaiting_user` is a new state used by the
+ * per-department approval gate: the pipeline is paused waiting for the
+ * user to either approve the current artifact, provide revision
+ * feedback, or answer a department's mid-run clarification question.
+ * The client renders the same Pipeline tab in both `generating` and
+ * `awaiting_user` states — the difference is which buttons are shown.
+ */
 export type SessionStatus =
   | "refining"
   | "locked"
   | "generating"
+  | "awaiting_user"
   | "completed"
   | "error"
   | "cancelled";

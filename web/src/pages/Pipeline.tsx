@@ -17,6 +17,8 @@ import {
   useHistoryAverages,
   useLive,
   useConnectorActions,
+  type ClarificationAnswer,
+  type ClarificationRequest,
   type DocumentArtifact,
   type SpecialistSnapshot,
   type StageTeamSnapshot,
@@ -28,12 +30,21 @@ export function PipelinePage() {
   const currentSession = useCurrentSession();
   const live = useLive();
   const averages = useHistoryAverages();
-  const { setTab, regenerate } = useConnectorActions();
+  const { setTab, regenerate, approveStage, reviseStage, answerClarifications } =
+    useConnectorActions();
 
   // Which artifact's debate trail is currently expanded. Only one at a
   // time — the user opens it explicitly by clicking a tile, which
   // matches the "hide verbose by default" ask.
   const [openKind, setOpenKind] = useState<DocumentKind | null>(null);
+
+  // Per-department scratch text for the "Revise" feedback textarea and
+  // clarification-answer textareas. Kept local to the page (rather than
+  // in the global store) — they're transient UI state, not persisted.
+  const [feedbackByKind, setFeedbackByKind] = useState<Partial<Record<DocumentKind, string>>>({});
+  const [clarAnswersByKind, setClarAnswersByKind] = useState<
+    Partial<Record<DocumentKind, Record<string, string>>>
+  >({});
 
   // Live wall-clock tick for the current-run duration and any in-flight
   // per-team tiles. We only spin an interval while there's something
@@ -44,6 +55,7 @@ export function PipelinePage() {
     currentSession?.status === "refining" ||
     currentSession?.status === "locked" ||
     currentSession?.status === "generating" ||
+    currentSession?.status === "awaiting_user" ||
     live.running ||
     live.concepting;
   useEffect(() => {
@@ -108,6 +120,7 @@ export function PipelinePage() {
   const showProgress =
     currentSession.status === "generating" ||
     currentSession.status === "locked" ||
+    currentSession.status === "awaiting_user" ||
     currentSession.status === "completed" ||
     live.running ||
     live.concepting;
@@ -167,6 +180,78 @@ export function PipelinePage() {
 
       <ConceptCard />
 
+      {/*
+        The approval / clarification gates are the star of the show
+        when they're up — they sit RIGHT under the concept card so the
+        user doesn't have to scroll past the pipeline DAG to see what
+        the pipeline is blocked on. When no gate is active, the whole
+        section renders nothing.
+      */}
+      {(() => {
+        const pendingKind =
+          [...live.awaitingClarification][0] ?? [...live.awaitingApproval][0] ?? null;
+        if (!pendingKind) return null;
+        const team = teamByKind.get(pendingKind);
+        const artifact = artByKind.get(pendingKind);
+        if (!team || !artifact) return null;
+        const inFlight = live.actionInFlight[pendingKind];
+        if (live.awaitingClarification.has(pendingKind)) {
+          const answers = clarAnswersByKind[pendingKind] ?? {};
+          const pending = (artifact.clarifications ?? []).filter(
+            (c) =>
+              !(artifact.clarificationAnswers ?? []).some((a) => a.requestId === c.id),
+          );
+          return (
+            <ClarificationPanel
+              team={team}
+              artifact={artifact}
+              pending={pending}
+              answers={answers}
+              onAnswerChange={(id, value) =>
+                setClarAnswersByKind((prev) => ({
+                  ...prev,
+                  [pendingKind]: { ...(prev[pendingKind] ?? {}), [id]: value },
+                }))
+              }
+              onSubmit={() => {
+                const payload: ClarificationAnswer[] = pending.map((c) => ({
+                  requestId: c.id,
+                  answer: (answers[c.id] ?? "").trim(),
+                }));
+                void answerClarifications(pendingKind, payload);
+              }}
+              busy={inFlight === "clarify"}
+            />
+          );
+        }
+        // awaiting_approval
+        const feedback = feedbackByKind[pendingKind] ?? "";
+        return (
+          <ApprovalPanel
+            team={team}
+            artifact={artifact}
+            feedback={feedback}
+            onFeedbackChange={(v) =>
+              setFeedbackByKind((prev) => ({ ...prev, [pendingKind]: v }))
+            }
+            onApprove={() => void approveStage(pendingKind)}
+            onRevise={() => {
+              const trimmed = feedback.trim();
+              if (!trimmed) return;
+              void reviseStage(pendingKind, trimmed);
+              setFeedbackByKind((prev) => {
+                const next = { ...prev };
+                delete next[pendingKind];
+                return next;
+              });
+            }}
+            onOpenDebate={() => setOpenKind(pendingKind)}
+            approving={inFlight === "approve"}
+            revising={inFlight === "revise"}
+          />
+        );
+      })()}
+
       <section>
         <h2 className="font-display text-xl text-slate-900 mb-3">Dependency pipeline</h2>
         <div className="card p-6 overflow-x-auto">
@@ -188,6 +273,8 @@ export function PipelinePage() {
                         liveGenerating: live.generating,
                         liveDone: live.done,
                         liveErrors: live.errors,
+                        liveAwaitingApproval: live.awaitingApproval,
+                        liveAwaitingClarification: live.awaitingClarification,
                         industry: currentSession.industry,
                       });
                       // Live duration: server-stamped when the stage
@@ -331,9 +418,11 @@ function ProgressBar({
   const bar =
     status === "completed"
       ? "bg-emerald-500"
-      : errored > 0
-        ? "bg-amber-500"
-        : "bg-indigo-500";
+      : status === "awaiting_user"
+        ? "bg-indigo-500"
+        : errored > 0
+          ? "bg-amber-500"
+          : "bg-indigo-500";
   const elapsedTitle =
     elapsedMs !== null
       ? (live ? "Running for " : "Total run time ") +
@@ -349,11 +438,13 @@ function ProgressBar({
           <span className="text-sm font-semibold text-slate-800">
             {status === "completed"
               ? "Pipeline complete"
-              : status === "generating"
-                ? "Generating artifacts…"
-                : status === "locked"
-                  ? "Warming up…"
-                  : "Running"}
+              : status === "awaiting_user"
+                ? "Waiting on your input"
+                : status === "generating"
+                  ? "Generating artifacts…"
+                  : status === "locked"
+                    ? "Warming up…"
+                    : "Running"}
           </span>
           <span className="text-xs text-slate-500">
             {done}/{total} done
@@ -524,6 +615,316 @@ function StageDebatePanel({
         </div>
       )}
     </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Approval + Clarification gates
+ *
+ * These two components are the user-facing side of the per-department
+ * pause-and-verify contract:
+ *
+ *   - `ApprovalPanel` renders after a department has finished its
+ *     debate. The user reviews the artifact and either Approves it
+ *     (unblocks the next department) or writes free-form feedback
+ *     and clicks Revise (re-runs the SAME department with the
+ *     feedback baked into every prompt).
+ *
+ *   - `ClarificationPanel` renders when a department pauses mid-debate
+ *     because ≥ 1 member raised a clarifying question. Blank answers
+ *     are permitted — the department is told (via its prompt) to fall
+ *     back to a documented assumption when the user declines to
+ *     answer.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+function ApprovalPanel({
+  team,
+  artifact,
+  feedback,
+  onFeedbackChange,
+  onApprove,
+  onRevise,
+  onOpenDebate,
+  approving,
+  revising,
+}: {
+  team: StageTeamSnapshot;
+  artifact: DocumentArtifact;
+  feedback: string;
+  onFeedbackChange: (v: string) => void;
+  onApprove: () => void;
+  onRevise: () => void;
+  onOpenDebate: () => void;
+  approving: boolean;
+  revising: boolean;
+}) {
+  const lead = team.members[0];
+  const revisionCount = artifact.revisionCount ?? 0;
+  const hasFeedback = feedback.trim().length > 0;
+  const busy = approving || revising;
+  return (
+    <section className="card overflow-hidden border-2 border-indigo-300 shadow-pop">
+      <div className="px-5 py-3 bg-indigo-50 border-b border-indigo-200 flex items-center gap-3">
+        {lead && <SpecialistAvatar persona={lead} size="sm" />}
+        <div className="flex-1 min-w-0">
+          <div className="text-[11px] uppercase tracking-wider text-indigo-700 font-semibold">
+            {revisionCount === 0
+              ? "Review needed"
+              : `Review needed · revision ${revisionCount}`}
+          </div>
+          <div className="text-sm font-semibold text-slate-900 truncate">
+            {artifact.title} — awaiting your Approve / Revise decision
+          </div>
+        </div>
+        <span className="text-[10px] uppercase tracking-wider bg-white text-indigo-800 border border-indigo-200 rounded px-2 py-0.5 font-medium">
+          Paused
+        </span>
+      </div>
+
+      <div className="p-5 space-y-4">
+        <p className="text-sm text-slate-700">
+          The {team.members.length}-member {artifact.title} team has finished
+          debating and produced the artifact below. Approve to unblock the
+          next department, or write feedback and click Revise to re-run this
+          department with your notes baked in — nothing else runs until you
+          decide.
+        </p>
+
+        <details className="rounded border border-slate-200 bg-slate-50" open>
+          <summary className="cursor-pointer px-3 py-2 text-xs uppercase tracking-wider text-slate-600 font-semibold hover:bg-slate-100 rounded-t">
+            Draft preview
+          </summary>
+          <div className="p-4 max-h-[420px] overflow-y-auto bg-white border-t border-slate-200">
+            {artifact.content ? (
+              <Markdown source={artifact.content} />
+            ) : (
+              <div className="text-sm italic text-slate-500">
+                No draft content was produced.
+              </div>
+            )}
+          </div>
+        </details>
+
+        <div>
+          <label
+            htmlFor={`feedback-${artifact.kind}`}
+            className="block text-xs uppercase tracking-wider text-slate-500 font-medium mb-1"
+          >
+            Feedback for the team (optional — required only if you want to Revise)
+          </label>
+          <textarea
+            id={`feedback-${artifact.kind}`}
+            className="field w-full min-h-[110px] text-sm resize-y"
+            placeholder="What should change? Example: `The scale is wrong — target 5000 T/year not 500. Also, drop the Malaysia option.`"
+            value={feedback}
+            onChange={(e) => onFeedbackChange(e.target.value)}
+            disabled={busy}
+          />
+        </div>
+
+        {artifact.revisions && artifact.revisions.length > 0 && (
+          <details className="rounded border border-slate-200 bg-slate-50">
+            <summary className="cursor-pointer px-3 py-2 text-xs uppercase tracking-wider text-slate-600 font-medium hover:bg-slate-100">
+              Prior revision requests ({artifact.revisions.length})
+            </summary>
+            <ul className="p-3 space-y-2 text-sm">
+              {artifact.revisions.map((r) => (
+                <li key={r.n} className="border-l-2 border-indigo-300 pl-3">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-0.5">
+                    Revision {r.n}
+                  </div>
+                  <div className="whitespace-pre-wrap text-slate-800">
+                    {r.feedback}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <button
+            className="text-xs text-slate-500 hover:text-slate-800 underline"
+            onClick={onOpenDebate}
+            type="button"
+          >
+            View the debate trail →
+          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              className="btn btn-ghost"
+              type="button"
+              onClick={onRevise}
+              disabled={busy || !hasFeedback}
+              title={
+                hasFeedback
+                  ? "Re-run this department with your feedback"
+                  : "Write feedback above to enable Revise"
+              }
+            >
+              {revising ? (
+                <>
+                  <Spinner /> Re-running…
+                </>
+              ) : (
+                "Revise with feedback"
+              )}
+            </button>
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={onApprove}
+              disabled={busy}
+              title="Approve this artifact and unblock the next department"
+            >
+              {approving ? (
+                <>
+                  <Spinner /> Approving…
+                </>
+              ) : (
+                "Approve → next department"
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ClarificationPanel({
+  team,
+  artifact,
+  pending,
+  answers,
+  onAnswerChange,
+  onSubmit,
+  busy,
+}: {
+  team: StageTeamSnapshot;
+  artifact: DocumentArtifact;
+  pending: ClarificationRequest[];
+  answers: Record<string, string>;
+  onAnswerChange: (id: string, value: string) => void;
+  onSubmit: () => void;
+  busy: boolean;
+}) {
+  const lead = team.members[0];
+  const memberById = new Map(team.members.map((m) => [m.id, m]));
+  return (
+    <section className="card overflow-hidden border-2 border-amber-300 shadow-pop">
+      <div className="px-5 py-3 bg-amber-50 border-b border-amber-200 flex items-center gap-3">
+        {lead && <SpecialistAvatar persona={lead} size="sm" />}
+        <div className="flex-1 min-w-0">
+          <div className="text-[11px] uppercase tracking-wider text-amber-800 font-semibold">
+            Clarification needed
+          </div>
+          <div className="text-sm font-semibold text-slate-900 truncate">
+            The {artifact.title} team has {pending.length}{" "}
+            question{pending.length === 1 ? "" : "s"} before it can continue
+          </div>
+        </div>
+        <span className="text-[10px] uppercase tracking-wider bg-white text-amber-800 border border-amber-200 rounded px-2 py-0.5 font-medium">
+          Paused mid-debate
+        </span>
+      </div>
+      <div className="p-5 space-y-4">
+        <p className="text-sm text-slate-700">
+          Members below hit a genuine ambiguity in the refined concept while
+          drafting round 1. Answer each question below (or leave blank to
+          let the team make a documented assumption), then the debate will
+          resume from round 2 with your answers baked in.
+        </p>
+
+        <ul className="space-y-3">
+          {pending.map((c, idx) => {
+            const asker = memberById.get(c.memberId);
+            return (
+              <li
+                key={c.id}
+                className="rounded border border-amber-200 bg-amber-50/40 p-3"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  {asker && <SpecialistAvatar persona={asker} size="sm" />}
+                  <span className="text-[10px] uppercase tracking-wider text-slate-500">
+                    Q{idx + 1} · asked by {asker?.name ?? c.memberId} · round {c.round}
+                  </span>
+                </div>
+                <div className="text-[15px] text-slate-900 font-medium">
+                  {c.question}
+                </div>
+                {c.whyItMatters && (
+                  <div className="text-xs text-slate-600 italic mt-1">
+                    Why: {c.whyItMatters}
+                  </div>
+                )}
+                <textarea
+                  className="field mt-2 w-full min-h-[70px] text-sm resize-y"
+                  placeholder="Your answer (leave blank to let the team assume)…"
+                  value={answers[c.id] ?? ""}
+                  onChange={(e) => onAnswerChange(c.id, e.target.value)}
+                  disabled={busy}
+                />
+              </li>
+            );
+          })}
+        </ul>
+
+        {(artifact.clarificationAnswers ?? []).length > 0 && (
+          <details className="rounded border border-slate-200 bg-slate-50">
+            <summary className="cursor-pointer px-3 py-2 text-xs uppercase tracking-wider text-slate-600 font-medium hover:bg-slate-100">
+              Prior answered clarifications (
+              {(artifact.clarificationAnswers ?? []).length})
+            </summary>
+            <ul className="p-3 space-y-2 text-sm">
+              {(artifact.clarificationAnswers ?? []).map((a) => {
+                const c = (artifact.clarifications ?? []).find(
+                  (x) => x.id === a.requestId,
+                );
+                if (!c) return null;
+                return (
+                  <li
+                    key={a.requestId}
+                    className="border-l-2 border-slate-300 pl-3"
+                  >
+                    <div className="text-slate-700 font-medium">
+                      Q: {c.question}
+                    </div>
+                    <div className="text-slate-600 mt-0.5">
+                      A:{" "}
+                      {a.answer.trim() ? (
+                        a.answer
+                      ) : (
+                        <span className="italic text-slate-400">
+                          (blank — team assumed defaults)
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+        )}
+
+        <div className="flex items-center justify-end">
+          <button
+            className="btn btn-primary"
+            type="button"
+            onClick={onSubmit}
+            disabled={busy || pending.length === 0}
+          >
+            {busy ? (
+              <>
+                <Spinner /> Resuming…
+              </>
+            ) : (
+              "Submit answers → resume debate"
+            )}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 

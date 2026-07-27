@@ -126,6 +126,49 @@ export interface StageRound {
   endedAt: string;
 }
 
+/**
+ * Per-department approval lifecycle. Mirrors the server enum in
+ * `server/src/types.ts`. `undefined` on legacy sessions means the
+ * artifact was produced before the approval gate existed — the UI
+ * treats those as implicitly approved.
+ */
+export type ArtifactApprovalStatus =
+  | "not_started"
+  | "generating"
+  | "awaiting_clarification"
+  | "awaiting_approval"
+  | "approved"
+  | "revising"
+  | "error";
+
+/**
+ * A clarifying question raised BY a department member DURING the
+ * debate (typically after round 1). Answering these unblocks the
+ * paused department.
+ */
+export interface ClarificationRequest {
+  id: string;
+  kind: DocumentKind;
+  memberId: string;
+  question: string;
+  whyItMatters?: string;
+  round: number;
+  askedAt: string;
+}
+
+export interface ClarificationAnswer {
+  requestId: string;
+  answer: string;
+  answeredAt?: string;
+}
+
+/** One revision cycle triggered by the user on a specific artifact. */
+export interface UserRevisionRequest {
+  n: number;
+  feedback: string;
+  requestedAt: string;
+}
+
 export interface DocumentArtifact {
   kind: DocumentKind;
   title: string;
@@ -143,12 +186,31 @@ export interface DocumentArtifact {
   endedAt?: string;
   /** Convenience — `endedAt - startedAt` in ms. Absent while streaming. */
   durationMs?: number;
+
+  /** Per-department user-approval state. See `ArtifactApprovalStatus`. */
+  approvalStatus?: ArtifactApprovalStatus;
+  /** ISO stamp of the user's Approve click. */
+  approvedAt?: string;
+  /** Ordered history of user revision requests on this artifact. */
+  revisions?: UserRevisionRequest[];
+  /** Convenience — `revisions.length`. */
+  revisionCount?: number;
+  /** Every clarification the department has raised (resolved + pending). */
+  clarifications?: ClarificationRequest[];
+  /** User-supplied answers, matched to `clarifications` by `requestId`. */
+  clarificationAnswers?: ClarificationAnswer[];
 }
 
+/**
+ * Overall session lifecycle. `awaiting_user` is a new intermediate
+ * state where the pipeline is paused for user input — either an
+ * artifact-approval decision or a mid-run clarification.
+ */
 export type SessionStatus =
   | "refining"
   | "locked"
   | "generating"
+  | "awaiting_user"
   | "completed"
   | "error"
   | "cancelled";
@@ -269,6 +331,8 @@ export type SessionEvent =
       memberIds: string[];
       leadId: string;
       title: string;
+      /** 1-indexed revision cycle. > 1 means the user asked for a revision. */
+      revisionCycle: number;
     }
   | {
       type: "artifact.round.started";
@@ -281,6 +345,31 @@ export type SessionEvent =
       kind: DocumentKind;
       round: StageRound;
       converged: boolean;
+    }
+  /** Department paused mid-run because ≥ 1 member needs user input. */
+  | {
+      type: "artifact.clarification.requested";
+      kind: DocumentKind;
+      requests: ClarificationRequest[];
+    }
+  /** User answered the clarifications; the department is resuming. */
+  | {
+      type: "artifact.clarification.answered";
+      kind: DocumentKind;
+      answers: ClarificationAnswer[];
+    }
+  /** Debate finished — artifact is waiting on user approve/revise. */
+  | {
+      type: "artifact.awaiting_approval";
+      kind: DocumentKind;
+      artifact: DocumentArtifact;
+    }
+  | { type: "artifact.approved"; kind: DocumentKind; artifact: DocumentArtifact }
+  | {
+      type: "artifact.revising";
+      kind: DocumentKind;
+      feedback: string;
+      revisionCycle: number;
     }
   | { type: "artifact.completed"; artifact: DocumentArtifact }
   | { type: "artifact.error"; kind: DocumentKind; message: string }

@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { api, type HealthResponse } from "./api";
 import type {
   ArchitectureSession,
+  ClarificationAnswer,
+  ClarificationRequest,
   ClarifyAnswer,
   DocumentArtifact,
   HistoryAverages,
@@ -85,6 +87,27 @@ export interface LiveState {
   errors: Partial<Record<DocumentKind, string>>;
   /** Session-level error. */
   error: string | null;
+
+  /**
+   * Which artifact kinds are currently waiting on user approval.
+   * When non-empty the Pipeline UI shows the Approve/Revise buttons
+   * for those tiles. Populated from the SSE
+   * `artifact.awaiting_approval` event (and reset via
+   * `artifact.approved` / `artifact.revising`).
+   */
+  awaitingApproval: Set<DocumentKind>;
+  /**
+   * Which artifact kinds are currently waiting on user answers to
+   * mid-run clarification questions. Populated from the
+   * `artifact.clarification.requested` event.
+   */
+  awaitingClarification: Set<DocumentKind>;
+  /**
+   * Per-kind: transient "we just sent an approve / revise / clarify
+   * request to the server" flag so the buttons can render disabled
+   * until the follow-up SSE event arrives.
+   */
+  actionInFlight: Partial<Record<DocumentKind, "approve" | "revise" | "clarify">>;
 }
 
 export interface StoreState {
@@ -134,6 +157,24 @@ export interface StoreState {
   submitRefinement: () => Promise<void>;
   lockIdea: () => Promise<void>;
   regenerate: () => Promise<void>;
+
+  /** Approve the current department's artifact and advance the pipeline. */
+  approveStage: (kind: DocumentKind) => Promise<void>;
+  /**
+   * Request a revision of the current department's artifact with
+   * user-supplied feedback. Server re-runs the debate with the
+   * feedback injected into every prompt.
+   */
+  reviseStage: (kind: DocumentKind, feedback: string) => Promise<void>;
+  /**
+   * Answer the mid-run clarification questions the department raised.
+   * Blank answers are permitted — the department will document them
+   * as assumptions.
+   */
+  answerClarifications: (
+    kind: DocumentKind,
+    answers: ClarificationAnswer[],
+  ) => Promise<void>;
 }
 
 export const initialLive: LiveState = {
@@ -148,6 +189,9 @@ export const initialLive: LiveState = {
   latestAgreement: {},
   errors: {},
   error: null,
+  awaitingApproval: new Set(),
+  awaitingClarification: new Set(),
+  actionInFlight: {},
 };
 
 export function personaToSnapshot(p: SpecialistPersona): SpecialistSnapshot {
@@ -183,6 +227,9 @@ function cloneLive(l: LiveState): LiveState {
     activeMembers: { ...l.activeMembers },
     latestAgreement: { ...l.latestAgreement },
     errors: { ...l.errors },
+    awaitingApproval: new Set(l.awaitingApproval),
+    awaitingClarification: new Set(l.awaitingClarification),
+    actionInFlight: { ...l.actionInFlight },
   };
 }
 
@@ -234,11 +281,15 @@ export function applyEvent(
 
     case "artifact.started": {
       live.generating.add(event.kind);
+      live.awaitingApproval.delete(event.kind);
+      live.awaitingClarification.delete(event.kind);
+      delete live.actionInFlight[event.kind];
       live.currentRound[event.kind] = 0;
       live.activeMembers[event.kind] = [];
       live.latestAgreement[event.kind] = {};
       delete live.errors[event.kind];
       if (session) {
+        const prev = session.artifacts.find((a) => a.kind === event.kind);
         const placeholder: DocumentArtifact = {
           kind: event.kind,
           title: event.title,
@@ -248,6 +299,11 @@ export function applyEvent(
           streaming: true,
           rounds: [],
           finalAgreements: {},
+          approvalStatus: "generating",
+          revisions: prev?.revisions,
+          revisionCount: Math.max(0, event.revisionCycle - 1),
+          clarifications: prev?.clarifications,
+          clarificationAnswers: prev?.clarificationAnswers,
         };
         const idx = session.artifacts.findIndex((a) => a.kind === event.kind);
         const next = [...session.artifacts];
@@ -298,8 +354,12 @@ export function applyEvent(
     }
 
     case "artifact.completed": {
+      // Debate finished — but the department is not YET "done" from
+      // the pipeline's perspective; it still needs user approval.
+      // The `artifact.awaiting_approval` event (which the orchestrator
+      // emits right after `artifact.completed`) is what actually
+      // switches the UI into the approve/revise mode.
       live.generating.delete(event.artifact.kind);
-      live.done.add(event.artifact.kind);
       live.activeMembers[event.artifact.kind] = [];
       const scores: Record<string, number> = {};
       for (const d of event.artifact.rounds[event.artifact.rounds.length - 1]?.drafts ?? []) {
@@ -317,8 +377,117 @@ export function applyEvent(
       break;
     }
 
+    case "artifact.awaiting_approval": {
+      // Pipeline paused — user must Approve or Revise before we advance.
+      live.generating.delete(event.kind);
+      live.awaitingApproval.add(event.kind);
+      live.awaitingClarification.delete(event.kind);
+      delete live.actionInFlight[event.kind];
+      if (session) {
+        const idx = session.artifacts.findIndex((a) => a.kind === event.kind);
+        const next = [...session.artifacts];
+        const merged: DocumentArtifact = {
+          ...event.artifact,
+          streaming: false,
+          approvalStatus: "awaiting_approval",
+        };
+        if (idx >= 0) next[idx] = merged;
+        else next.push(merged);
+        session = { ...session, artifacts: next, status: "awaiting_user" };
+      }
+      break;
+    }
+
+    case "artifact.approved": {
+      live.awaitingApproval.delete(event.kind);
+      live.done.add(event.kind);
+      delete live.actionInFlight[event.kind];
+      if (session) {
+        const idx = session.artifacts.findIndex((a) => a.kind === event.kind);
+        const next = [...session.artifacts];
+        const merged: DocumentArtifact = {
+          ...event.artifact,
+          approvalStatus: "approved",
+        };
+        if (idx >= 0) next[idx] = merged;
+        else next.push(merged);
+        // The next artifact.started event will bump us back to
+        // "generating"; if this was the LAST department, session.completed
+        // will follow. For now stay in generating to reflect that the
+        // pipeline is once again progressing.
+        session = { ...session, artifacts: next, status: "generating" };
+      }
+      break;
+    }
+
+    case "artifact.revising": {
+      // User asked for a redo. The subsequent artifact.started event
+      // will reset everything for the new cycle; here we just clear
+      // the awaiting flag and drop the "we clicked revise" transient.
+      live.awaitingApproval.delete(event.kind);
+      live.done.delete(event.kind);
+      delete live.actionInFlight[event.kind];
+      break;
+    }
+
+    case "artifact.clarification.requested": {
+      live.awaitingClarification.add(event.kind);
+      live.generating.delete(event.kind);
+      delete live.actionInFlight[event.kind];
+      if (session) {
+        const idx = session.artifacts.findIndex((a) => a.kind === event.kind);
+        const next = [...session.artifacts];
+        if (idx >= 0) {
+          const existing = next[idx]!;
+          const merged: ClarificationRequest[] = [
+            ...(existing.clarifications ?? []),
+            ...event.requests.filter(
+              (r) => !(existing.clarifications ?? []).some((x) => x.id === r.id),
+            ),
+          ];
+          next[idx] = {
+            ...existing,
+            approvalStatus: "awaiting_clarification",
+            clarifications: merged,
+            streaming: false,
+          };
+        }
+        session = { ...session, artifacts: next, status: "awaiting_user" };
+      }
+      break;
+    }
+
+    case "artifact.clarification.answered": {
+      live.awaitingClarification.delete(event.kind);
+      delete live.actionInFlight[event.kind];
+      if (session) {
+        const idx = session.artifacts.findIndex((a) => a.kind === event.kind);
+        const next = [...session.artifacts];
+        if (idx >= 0) {
+          const existing = next[idx]!;
+          const answers: ClarificationAnswer[] = [
+            ...(existing.clarificationAnswers ?? []).filter(
+              (a) => !event.answers.some((x) => x.requestId === a.requestId),
+            ),
+            ...event.answers,
+          ];
+          next[idx] = {
+            ...existing,
+            approvalStatus: "generating",
+            clarificationAnswers: answers,
+            streaming: true,
+          };
+        }
+        session = { ...session, artifacts: next, status: "generating" };
+      }
+      break;
+    }
+
     case "artifact.error":
       live.generating.delete(event.kind);
+      live.awaitingApproval.delete(event.kind);
+      live.awaitingClarification.delete(event.kind);
+      delete live.actionInFlight[event.kind];
       live.activeMembers[event.kind] = [];
       live.errors[event.kind] = event.message;
       break;
@@ -391,9 +560,23 @@ export const useStore = create<StoreState>((set, get) => ({
   async openSession(id) {
     const { session } = await api.getSession(id);
     get().eventSource?.close();
-    const live: LiveState = { ...initialLive, sessionId: id };
+    const live: LiveState = {
+      ...initialLive,
+      sessionId: id,
+      // Rebuild the transient live flags from server state so a page
+      // reload lands the user back into the correct approval gate.
+      awaitingApproval: new Set(),
+      awaitingClarification: new Set(),
+      done: new Set(),
+      generating: new Set(),
+    };
     for (const a of session.artifacts) {
-      if (a.content && !a.error) live.done.add(a.kind);
+      if (a.approvalStatus === "approved") live.done.add(a.kind);
+      else if (a.content && !a.error && !a.approvalStatus) live.done.add(a.kind); // legacy
+      if (a.approvalStatus === "awaiting_approval") live.awaitingApproval.add(a.kind);
+      if (a.approvalStatus === "awaiting_clarification")
+        live.awaitingClarification.add(a.kind);
+      if (a.approvalStatus === "generating") live.generating.add(a.kind);
       if (a.error) live.errors[a.kind] = a.error;
       live.currentRound[a.kind] = a.rounds.length;
       live.latestAgreement[a.kind] = { ...a.finalAgreements };
@@ -667,6 +850,93 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
   },
+
+  async approveStage(kind) {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    // Mark the button transiently disabled until the SSE round-trip
+    // confirms — the `artifact.approved` event will clear this flag.
+    set((s) => ({
+      live: {
+        ...s.live,
+        actionInFlight: { ...s.live.actionInFlight, [kind]: "approve" as const },
+      },
+    }));
+    // Ensure we have an SSE stream open so we receive the subsequent
+    // artifact.started events for auto-advance.
+    if (!get().eventSource) openStream(currentSession.id, set, get);
+    try {
+      await api.approveStage(currentSession.id, kind);
+    } catch (err) {
+      set((s) => {
+        const nextFlight = { ...s.live.actionInFlight };
+        delete nextFlight[kind];
+        return {
+          live: {
+            ...s.live,
+            actionInFlight: nextFlight,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        };
+      });
+    }
+  },
+
+  async reviseStage(kind, feedback) {
+    const trimmed = feedback.trim();
+    if (!trimmed) return;
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set((s) => ({
+      live: {
+        ...s.live,
+        actionInFlight: { ...s.live.actionInFlight, [kind]: "revise" as const },
+      },
+    }));
+    if (!get().eventSource) openStream(currentSession.id, set, get);
+    try {
+      await api.reviseStage(currentSession.id, kind, trimmed);
+    } catch (err) {
+      set((s) => {
+        const nextFlight = { ...s.live.actionInFlight };
+        delete nextFlight[kind];
+        return {
+          live: {
+            ...s.live,
+            actionInFlight: nextFlight,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        };
+      });
+    }
+  },
+
+  async answerClarifications(kind, answers) {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set((s) => ({
+      live: {
+        ...s.live,
+        actionInFlight: { ...s.live.actionInFlight, [kind]: "clarify" as const },
+      },
+    }));
+    if (!get().eventSource) openStream(currentSession.id, set, get);
+    try {
+      await api.submitClarifications(currentSession.id, kind, answers);
+    } catch (err) {
+      set((s) => {
+        const nextFlight = { ...s.live.actionInFlight };
+        delete nextFlight[kind];
+        return {
+          live: {
+            ...s.live,
+            actionInFlight: nextFlight,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        };
+      });
+    }
+  },
 }));
 
 /**
@@ -765,7 +1035,19 @@ function reconcile(
       : s.currentSession.artifacts;
   const live = cloneLive(s.live);
   for (const a of mergedArtifacts) {
-    if (a.content && !a.error) live.done.add(a.kind);
+    // Only count a stage as "done" when the user has actually approved
+    // it — with the interactive approval gate, "has content" no longer
+    // means the pipeline moved past this department. Legacy sessions
+    // (approvalStatus === undefined) keep the old "content = done"
+    // semantics so their history renders correctly.
+    if (a.approvalStatus === "approved") live.done.add(a.kind);
+    else if (!a.approvalStatus && a.content && !a.error) live.done.add(a.kind);
+    if (a.approvalStatus === "awaiting_approval") live.awaitingApproval.add(a.kind);
+    else live.awaitingApproval.delete(a.kind);
+    if (a.approvalStatus === "awaiting_clarification")
+      live.awaitingClarification.add(a.kind);
+    else live.awaitingClarification.delete(a.kind);
+    if (a.approvalStatus === "generating") live.generating.add(a.kind);
     if (a.error) live.errors[a.kind] = a.error;
     if (a.rounds.length) {
       live.currentRound[a.kind] = a.rounds.length;

@@ -59,6 +59,8 @@ export type PipelineNodeStatus =
   | "disabled"
   | "queued"
   | "running"
+  | "awaiting_clarification"
+  | "awaiting_approval"
   | "done"
   | "error"
   | "skipped";
@@ -70,6 +72,10 @@ interface DerivedNodeInput {
   liveGenerating: Set<DocumentKind>;
   liveDone: Set<DocumentKind>;
   liveErrors: Partial<Record<DocumentKind, string>>;
+  /** Kinds waiting on user Approve / Revise. */
+  liveAwaitingApproval?: Set<DocumentKind>;
+  /** Kinds waiting on user answers to mid-run clarifications. */
+  liveAwaitingClarification?: Set<DocumentKind>;
   /**
    * Session-level industry classification. When set, the inactive
    * process kind (`procedure` on semiconductor runs, `semiconductor`
@@ -83,9 +89,25 @@ interface DerivedNodeInput {
  * Pure domain function: derive the status of a single pipeline node from
  * team configuration, artifact state, and live SSE flags. Extracted for
  * unit testing.
+ *
+ * Priority order matters: `error` beats everything (so a failed stage
+ * never hides its failure behind a stale "awaiting" flag); the two
+ * `awaiting_*` states beat `running` (they replace "the debate is
+ * happening" with "the debate is PAUSED for you"); `done` and
+ * `queued` are the neutral extremes.
  */
 export function derivePipelineNodeStatus(input: DerivedNodeInput): PipelineNodeStatus {
-  const { kind, team, artifact, liveGenerating, liveDone, liveErrors, industry } = input;
+  const {
+    kind,
+    team,
+    artifact,
+    liveGenerating,
+    liveDone,
+    liveErrors,
+    liveAwaitingApproval,
+    liveAwaitingClarification,
+    industry,
+  } = input;
   if (!team) return "disabled";
   // If this is the inactive process kind for the run, treat it as
   // skipped (not disabled — the team IS configured, we just don't
@@ -101,8 +123,20 @@ export function derivePipelineNodeStatus(input: DerivedNodeInput): PipelineNodeS
   ) {
     return "skipped";
   }
-  if (liveErrors[kind]) return "error";
-  if (liveGenerating.has(kind)) return "running";
+  if (liveErrors[kind] || artifact?.approvalStatus === "error") return "error";
+  if (
+    liveAwaitingClarification?.has(kind) ||
+    artifact?.approvalStatus === "awaiting_clarification"
+  )
+    return "awaiting_clarification";
+  if (
+    liveAwaitingApproval?.has(kind) ||
+    artifact?.approvalStatus === "awaiting_approval"
+  )
+    return "awaiting_approval";
+  if (liveGenerating.has(kind) || artifact?.approvalStatus === "generating")
+    return "running";
+  if (artifact?.approvalStatus === "approved") return "done";
   if (liveDone.has(kind) || (artifact?.content ?? "").length > 0) return "done";
   return "queued";
 }

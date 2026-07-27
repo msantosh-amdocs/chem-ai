@@ -1,5 +1,6 @@
 import type {
   ArchitectureSession,
+  ClarificationAnswer,
   ClarifyAnswer,
   GenerationSettings,
   HistoryAverages,
@@ -9,6 +10,7 @@ import type {
   SpecialistSnapshot,
   StageTeamSnapshot,
 } from "./types";
+import type { DocumentKind } from "./personas";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -99,6 +101,68 @@ export const api = {
       await fetch(`/api/session/${encodeURIComponent(sessionId)}/generate`, {
         method: "POST",
       }),
+    );
+  },
+
+  /**
+   * Approve the current department's artifact. Server marks it
+   * approved and auto-advances to the next department in the
+   * background — subsequent progress arrives via SSE.
+   */
+  async approveStage(
+    sessionId: string,
+    kind: DocumentKind,
+  ): Promise<{ ok: true; session: ArchitectureSession }> {
+    return json(
+      await fetch(
+        `/api/session/${encodeURIComponent(sessionId)}/stage/${encodeURIComponent(kind)}/approve`,
+        { method: "POST" },
+      ),
+    );
+  },
+
+  /**
+   * Request a revision of the current department's artifact with
+   * free-form feedback. The department re-runs with the feedback
+   * baked into every prompt in the debate; the client picks up
+   * fresh events via SSE.
+   */
+  async reviseStage(
+    sessionId: string,
+    kind: DocumentKind,
+    feedback: string,
+  ): Promise<{ ok: true; sessionId: string }> {
+    return json(
+      await fetch(
+        `/api/session/${encodeURIComponent(sessionId)}/stage/${encodeURIComponent(kind)}/revise`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ feedback }),
+        },
+      ),
+    );
+  },
+
+  /**
+   * Submit answers to a department's mid-run clarification
+   * questions. Blank answers are allowed and are treated as "no
+   * preference — use your best judgement" by the department.
+   */
+  async submitClarifications(
+    sessionId: string,
+    kind: DocumentKind,
+    answers: ClarificationAnswer[],
+  ): Promise<{ ok: true; sessionId: string }> {
+    return json(
+      await fetch(
+        `/api/session/${encodeURIComponent(sessionId)}/stage/${encodeURIComponent(kind)}/clarify`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answers }),
+        },
+      ),
     );
   },
 };

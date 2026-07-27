@@ -59,6 +59,9 @@ export function PipelineNode({
   const running = status === "running";
   const disabled = status === "disabled";
   const skipped = status === "skipped";
+  const awaitingApproval = status === "awaiting_approval";
+  const awaitingClarification = status === "awaiting_clarification";
+  const awaiting = awaitingApproval || awaitingClarification;
 
   const roundsSoFar = artifact?.rounds.length ?? 0;
   const lastRound = artifact?.rounds[artifact.rounds.length - 1];
@@ -69,6 +72,13 @@ export function PipelineNode({
             Math.max(1, lastRound.drafts.length),
         )
       : null;
+  const revisionCount = artifact?.revisionCount ?? 0;
+  const pendingClarifications = artifact
+    ? (artifact.clarifications ?? []).filter(
+        (c) =>
+          !(artifact.clarificationAnswers ?? []).some((a) => a.requestId === c.id),
+      ).length
+    : 0;
 
   const activeSet = useMemo(() => new Set(activeMembers ?? []), [activeMembers]);
 
@@ -80,9 +90,13 @@ export function PipelineNode({
         ? "bg-rose-50 border-rose-300"
         : done
           ? "bg-emerald-50 border-emerald-300"
-          : running
-            ? "bg-amber-50 border-amber-300 shadow-pop"
-            : "bg-white border-slate-200";
+          : awaitingClarification
+            ? "bg-amber-50 border-amber-400 shadow-pop"
+            : awaitingApproval
+              ? "bg-indigo-50 border-indigo-400 shadow-pop"
+              : running
+                ? "bg-amber-50 border-amber-300 shadow-pop"
+                : "bg-white border-slate-200";
 
   const clickable = !disabled && !skipped && !!onOpen;
   const Wrapper: "button" | "div" = clickable ? "button" : "div";
@@ -182,6 +196,21 @@ export function PipelineNode({
                 : artifact.terminatedBy === "maxRounds"
                   ? "stopped at max rounds"
                   : "errored"}
+            </div>
+          )}
+          {awaitingApproval && (
+            <div className="mt-1.5 text-[10px] text-indigo-800 font-medium">
+              Awaiting your Approve / Revise decision
+            </div>
+          )}
+          {awaitingClarification && (
+            <div className="mt-1.5 text-[10px] text-amber-800 font-medium">
+              {pendingClarifications} question{pendingClarifications === 1 ? "" : "s"} for you
+            </div>
+          )}
+          {revisionCount > 0 && !awaiting && (
+            <div className="mt-1 text-[10px] text-slate-500">
+              revision {revisionCount}
             </div>
           )}
           {cost && cost.llmCalls > 0 && (

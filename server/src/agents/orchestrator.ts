@@ -1,3 +1,4 @@
+import { nanoid } from "nanoid";
 import { promptModel, type PromptResult } from "./llm.js";
 import { priceUsage, roundUsd } from "./costs.js";
 import { classifyIndustryFromConcept } from "./industry.js";
@@ -7,11 +8,15 @@ import {
   stageInitialPrompt,
   stageReviseAndScorePrompt,
   TITLES,
+  type StagePromptContext,
   type UpstreamArtifacts,
 } from "./prompts.js";
 import { history } from "../store/history.js";
 import type {
   ArchitectureSession,
+  ArtifactApprovalStatus,
+  ClarificationAnswer,
+  ClarificationRequest,
   ClarifyAnswer,
   ClarifyQuestion,
   DocumentArtifact,
@@ -29,6 +34,7 @@ import type {
   StageTeam,
   TerminationPolicy,
   UploadedDoc,
+  UserRevisionRequest,
 } from "../types.js";
 
 /**
@@ -177,6 +183,11 @@ export type SessionEvent =
       memberIds: string[];
       leadId: string;
       title: string;
+      /**
+       * 1-indexed revision cycle. 1 = first pass. > 1 = re-run because
+       * the user requested a revision on the previous cycle's artifact.
+       */
+      revisionCycle: number;
     }
   | {
       type: "artifact.round.started";
@@ -191,6 +202,44 @@ export type SessionEvent =
       round: StageRound;
       /** True if this round satisfied the agreement threshold. */
       converged: boolean;
+    }
+  /**
+   * Department paused after round 1 because ≥ 1 member asked the user
+   * for clarification. The debate resumes once the user answers via
+   * `answerClarifications()`.
+   */
+  | {
+      type: "artifact.clarification.requested";
+      kind: DocumentKind;
+      requests: ClarificationRequest[];
+    }
+  /** User answered the clarifications; the department is resuming debate. */
+  | {
+      type: "artifact.clarification.answered";
+      kind: DocumentKind;
+      answers: ClarificationAnswer[];
+    }
+  /**
+   * Debate finished converging (or hit maxRounds); the artifact is now
+   * awaiting user approval before the pipeline advances to the next
+   * department.
+   */
+  | {
+      type: "artifact.awaiting_approval";
+      kind: DocumentKind;
+      artifact: DocumentArtifact;
+    }
+  /** User hit Approve on an awaiting_approval artifact. */
+  | { type: "artifact.approved"; kind: DocumentKind; artifact: DocumentArtifact }
+  /**
+   * User clicked Revise with feedback; a fresh debate run will restart
+   * shortly (an `artifact.started` event with the new revisionCycle).
+   */
+  | {
+      type: "artifact.revising";
+      kind: DocumentKind;
+      feedback: string;
+      revisionCycle: number;
     }
   | { type: "artifact.completed"; artifact: DocumentArtifact }
   | { type: "artifact.error"; kind: DocumentKind; message: string }
@@ -364,11 +413,21 @@ export async function lockAndProduceConcept(
 /* ────────────────────────────────────────────────────────────────────────── *
  * Department debate — one artifact per department, converge on agreement.
  *
- * Round 1: every member writes their own initial draft independently.
+ * Round 1: every member writes their own initial draft independently AND
+ *   may optionally raise clarifying questions for the user (via a
+ *   `<CLARIFICATIONS>…</CLARIFICATIONS>` prefix). If any questions come
+ *   back, the debate halts after round 1 until the user answers, then
+ *   continues from round 2.
  * Rounds 2..maxRounds: every member sees teammates' latest drafts and
  *   produces (critique, revised draft, self-scored agreement 0-100).
  * Terminate when every score ≥ threshold OR we hit maxRounds.
  * The lead (index 0) member's final draft is the artifact of record.
+ *
+ * After the debate finishes converging, the artifact is set to
+ * `awaiting_approval` and the pipeline pauses until the user either
+ * Approves (unblocks the next stage) or Revises (kicks a fresh cycle
+ * on this same stage with the user's feedback injected into the
+ * prompts).
  * ────────────────────────────────────────────────────────────────────────── */
 
 interface ReviseResult {
@@ -377,43 +436,136 @@ interface ReviseResult {
   agreement: number;
 }
 
-async function runStageDebate(
+/**
+ * Result of the `<CLARIFICATIONS>` block parsing plus the pruned
+ * markdown draft. Round 1 members are permitted to prefix their reply
+ * with a delimited JSON list of clarifying questions — we peel it off
+ * before treating the rest of the response as the actual draft.
+ */
+interface ExtractedRound1 {
+  draft: string;
+  clarifications: Array<{ question: string; whyItMatters?: string }>;
+}
+
+function extractRound1(raw: string): ExtractedRound1 {
+  const match = raw.match(/<CLARIFICATIONS>([\s\S]*?)<\/CLARIFICATIONS>/i);
+  if (!match) return { draft: raw.trim(), clarifications: [] };
+  const body = match[1]!.trim();
+  const draft = (raw.slice(0, match.index) + raw.slice(match.index! + match[0]!.length))
+    .trim();
+  const clarifications: Array<{ question: string; whyItMatters?: string }> = [];
+  try {
+    // Accept either a bare JSON array or a fenced ```json``` block.
+    const cleaned = body.replace(/```json/gi, "```").replace(/```/g, "").trim();
+    const parsed: unknown = JSON.parse(cleaned);
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        if (!item || typeof item !== "object") continue;
+        const rec = item as Record<string, unknown>;
+        const question = String(rec.question ?? "").trim();
+        if (!question) continue;
+        const whyItMatters = rec.whyItMatters
+          ? String(rec.whyItMatters).trim() || undefined
+          : undefined;
+        clarifications.push({ question, whyItMatters });
+      }
+    }
+  } catch {
+    /* If parsing fails, drop the block silently — the draft still stands. */
+  }
+  return { draft, clarifications };
+}
+
+/**
+ * Pending or resolved clarifications for a single stage, packaged into
+ * the `{ question, answer }` shape prompts expect.
+ */
+function resolvedClarificationPairs(
+  artifact: DocumentArtifact,
+): Array<{ question: string; answer: string }> {
+  const requests = artifact.clarifications ?? [];
+  const answers = artifact.clarificationAnswers ?? [];
+  const byId = new Map(answers.map((a) => [a.requestId, a]));
+  const out: Array<{ question: string; answer: string }> = [];
+  for (const r of requests) {
+    const a = byId.get(r.id);
+    if (a) out.push({ question: r.question, answer: a.answer });
+  }
+  return out;
+}
+
+/**
+ * Build the `StagePromptContext` we pass into `stageInitialPrompt` /
+ * `stageReviseAndScorePrompt` from what's already on the artifact.
+ * Returns `undefined` when there's genuinely nothing to inject (keeps
+ * the prompts identical to their pre-approval-gate shape for
+ * first-pass, no-clarification cases).
+ */
+function buildStageContext(artifact: DocumentArtifact | undefined): StagePromptContext | undefined {
+  if (!artifact) return undefined;
+  const feedback = artifact.revisions?.[artifact.revisions.length - 1]?.feedback;
+  const clarifications = resolvedClarificationPairs(artifact);
+  const revisionCycle = (artifact.revisionCount ?? 0) + 1;
+  if (!feedback && clarifications.length === 0 && revisionCycle === 1) {
+    return undefined;
+  }
+  return {
+    userFeedback: feedback,
+    prevArtifact: feedback ? artifact.content : undefined,
+    clarifications,
+    revisionCycle,
+  };
+}
+
+function ensureUpstreamMap(session: ArchitectureSession): Map<DocumentKind, DocumentArtifact> {
+  const map = new Map<DocumentKind, DocumentArtifact>();
+  for (const a of session.artifacts) map.set(a.kind, a);
+  return map;
+}
+
+function upstreamFor(session: ArchitectureSession): UpstreamArtifacts {
+  const m = ensureUpstreamMap(session);
+  return {
+    market: m.get("market"),
+    procedure: m.get("procedure"),
+    semiconductor: m.get("semiconductor"),
+    procurement: m.get("procurement"),
+    ip: m.get("ip"),
+    finance: m.get("finance"),
+  };
+}
+
+/** Replace (or append) an artifact on the session in place. */
+function upsertArtifact(session: ArchitectureSession, artifact: DocumentArtifact): void {
+  const idx = session.artifacts.findIndex((a) => a.kind === artifact.kind);
+  if (idx >= 0) session.artifacts[idx] = artifact;
+  else session.artifacts.push(artifact);
+}
+
+/** Sort artifacts into canonical order in place. */
+function reorderArtifacts(session: ArchitectureSession): void {
+  const rank = (k: DocumentKind) => ORDER.indexOf(k);
+  session.artifacts.sort((a, b) => rank(a.kind) - rank(b.kind));
+}
+
+/**
+ * Run round 1 for a stage: initial drafts + optional clarification
+ * requests. Persists the round to the artifact and returns whichever
+ * `nextStep` the caller should take:
+ *   - `"paused"` — the artifact was updated with pending clarifications
+ *     and the debate is halted; caller should NOT proceed to round 2.
+ *   - `"continue"` — no clarifications, safe to keep debating.
+ */
+async function runRound1(
   session: ArchitectureSession,
   team: StageTeam,
   refinedConcept: string,
   upstream: UpstreamArtifacts,
-  settings: GenerationSettings,
   docTexts: { filename: string; text: string }[],
-  onRound: (rounds: StageRound[]) => Promise<void>,
+  artifact: DocumentArtifact,
   emit: Emit,
-): Promise<DocumentArtifact> {
-  if (team.members.length < team.minMembers) {
-    throw new Error(
-      `Team for ${TITLES[team.kind]} needs at least ${team.minMembers} member(s); got ${team.members.length}.`,
-    );
-  }
-  const lead = team.members[0]!;
-  const rounds: StageRound[] = [];
-  const policy: TerminationPolicy = settings.terminationPolicy ?? "threshold_or_max";
-  const effectiveMaxRounds =
-    policy === "threshold_only"
-      ? HARD_ROUND_CAP
-      : Math.max(1, settings.maxRounds);
-
-  // Stamp the department's wall-clock start BEFORE we emit the event so
-  // the placeholder artifact persisted mid-flight already carries the
-  // start time — that lets the UI show live elapsed time immediately.
-  const stageStartedAt = new Date().toISOString();
-
-  emit({
-    type: "artifact.started",
-    kind: team.kind,
-    memberIds: team.members.map((m) => m.id),
-    leadId: lead.id,
-    title: TITLES[team.kind],
-  });
-
-  // ── Round 1: initial drafts in parallel ────────────────────────────────
+): Promise<{ nextStep: "paused" | "continue" }> {
+  const promptCtx = buildStageContext(artifact);
   emit({
     type: "artifact.round.started",
     kind: team.kind,
@@ -421,7 +573,15 @@ async function runStageDebate(
     memberIds: team.members.map((m) => m.id),
   });
   const round1Started = new Date().toISOString();
-  const round1Drafts = await Promise.all(
+  const drafts: StageRoundDraft[] = [];
+  const allClarifications: ClarificationRequest[] = [];
+
+  // Members STILL fan out in parallel within a round — they can't see
+  // each other's current-round drafts anyway, so serializing them
+  // wouldn't change any output, only slow things down. Sequentiality
+  // is enforced ACROSS departments (see `advancePipeline`), which is
+  // what the "one at a time" contract with the user requires.
+  const raws = await Promise.all(
     team.members.map(async (m) => {
       const teammates = team.members.filter((x) => x.id !== m.id);
       const { system, user } = stageInitialPrompt(
@@ -431,6 +591,7 @@ async function runStageDebate(
         refinedConcept,
         upstream,
         docTexts,
+        promptCtx,
       );
       const { text } = await tracedPrompt(
         session,
@@ -440,30 +601,86 @@ async function runStageDebate(
         system,
         m.params,
       );
-      return {
-        memberId: m.id,
-        content: text.trim(),
-        agreementWithOthers: 0,
-        createdAt: new Date().toISOString(),
-      } satisfies StageRoundDraft;
+      return { member: m, raw: text };
     }),
   );
-  rounds.push({
+
+  for (const { member, raw } of raws) {
+    const { draft, clarifications } = extractRound1(raw);
+    drafts.push({
+      memberId: member.id,
+      content: draft || raw.trim(),
+      agreementWithOthers: 0,
+      createdAt: new Date().toISOString(),
+    });
+    for (const c of clarifications) {
+      allClarifications.push({
+        id: nanoid(8),
+        kind: team.kind,
+        memberId: member.id,
+        round: 1,
+        question: c.question,
+        whyItMatters: c.whyItMatters,
+        askedAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  const round: StageRound = {
     n: 1,
-    drafts: round1Drafts,
+    drafts,
     startedAt: round1Started,
     endedAt: new Date().toISOString(),
-  });
+  };
+  artifact.rounds = [round];
   emit({
     type: "artifact.round.completed",
     kind: team.kind,
-    round: rounds[0]!,
+    round,
     converged: false,
   });
-  await onRound(rounds);
 
-  // ── Rounds 2..effectiveMaxRounds: critique + revise + score ────────────
+  if (allClarifications.length > 0) {
+    artifact.clarifications = [
+      ...(artifact.clarifications ?? []),
+      ...allClarifications,
+    ];
+    artifact.approvalStatus = "awaiting_clarification";
+    emit({
+      type: "artifact.clarification.requested",
+      kind: team.kind,
+      requests: allClarifications,
+    });
+    return { nextStep: "paused" };
+  }
+  return { nextStep: "continue" };
+}
+
+/**
+ * Run rounds 2..maxRounds until convergence or the round cap. Assumes
+ * round 1 (and any clarifications) already lives on `artifact.rounds`.
+ * Terminates the debate by updating `artifact` in place with the final
+ * lead draft, agreements, and termination reason.
+ */
+async function runRoundsAfterOne(
+  session: ArchitectureSession,
+  team: StageTeam,
+  refinedConcept: string,
+  upstream: UpstreamArtifacts,
+  docTexts: { filename: string; text: string }[],
+  settings: GenerationSettings,
+  artifact: DocumentArtifact,
+  emit: Emit,
+): Promise<void> {
+  const lead = team.members[0]!;
+  const policy: TerminationPolicy = settings.terminationPolicy ?? "threshold_or_max";
+  const effectiveMaxRounds =
+    policy === "threshold_only" ? HARD_ROUND_CAP : Math.max(1, settings.maxRounds);
+  const promptCtx = buildStageContext(artifact);
+
   let terminatedBy: "agreement" | "maxRounds" = "maxRounds";
+  const rounds = artifact.rounds;
+
   for (let n = 2; n <= effectiveMaxRounds; n++) {
     const prior = rounds[rounds.length - 1]!;
     const startedAt = new Date().toISOString();
@@ -473,7 +690,6 @@ async function runStageDebate(
       n,
       memberIds: team.members.map((m) => m.id),
     });
-
     const drafts = await Promise.all(
       team.members.map(async (m) => {
         const teammates = team.members.filter((x) => x.id !== m.id);
@@ -495,6 +711,7 @@ async function runStageDebate(
           docTexts,
           settings.threshold,
           n,
+          promptCtx,
         );
         const { text: raw } = await tracedPrompt(
           session,
@@ -517,21 +734,15 @@ async function runStageDebate(
         } satisfies StageRoundDraft;
       }),
     );
-
     const converged = drafts.every((d) => d.agreementWithOthers >= settings.threshold);
-    rounds.push({ n, drafts, startedAt, endedAt: new Date().toISOString() });
+    const round: StageRound = { n, drafts, startedAt, endedAt: new Date().toISOString() };
+    rounds.push(round);
     emit({
       type: "artifact.round.completed",
       kind: team.kind,
-      round: rounds[rounds.length - 1]!,
+      round,
       converged,
     });
-    await onRound(rounds);
-
-    // Termination policy — see `TerminationPolicy` doc-comment in types.ts:
-    //   threshold_or_max : stop on either (default)
-    //   threshold_only   : ignore maxRounds; stop only on convergence
-    //   max_only         : ignore convergence; always run every round
     if (converged && policy !== "max_only") {
       terminatedBy = "agreement";
       break;
@@ -540,48 +751,49 @@ async function runStageDebate(
 
   const finalRound = rounds[rounds.length - 1]!;
   const finalAgreements: Record<string, number> = {};
-  for (const d of finalRound.drafts) {
-    finalAgreements[d.memberId] = d.agreementWithOthers;
-  }
+  for (const d of finalRound.drafts) finalAgreements[d.memberId] = d.agreementWithOthers;
   const leadDraft =
     finalRound.drafts.find((d) => d.memberId === lead.id) ?? finalRound.drafts[0]!;
-
-  const stageEndedAt = new Date().toISOString();
-  const durationMs = diffMs(stageStartedAt, stageEndedAt);
-  if (durationMs !== undefined) {
-    ensureDurations(session).perTeam[team.kind] = durationMs;
+  artifact.content = leadDraft.content;
+  artifact.producedBy = lead.id;
+  artifact.terminatedBy = terminatedBy;
+  artifact.finalAgreements = finalAgreements;
+  artifact.streaming = false;
+  artifact.endedAt = new Date().toISOString();
+  artifact.durationMs = diffMs(artifact.startedAt, artifact.endedAt);
+  if (artifact.durationMs !== undefined) {
+    ensureDurations(session).perTeam[team.kind] = artifact.durationMs;
   }
-
-  return {
-    kind: team.kind,
-    title: TITLES[team.kind],
-    content: leadDraft.content,
-    producedBy: lead.id,
-    createdAt: stageEndedAt,
-    rounds,
-    terminatedBy,
-    finalAgreements,
-    startedAt: stageStartedAt,
-    endedAt: stageEndedAt,
-    durationMs,
-  };
 }
 
 /* ────────────────────────────────────────────────────────────────────────── *
- * Pipeline — the full DAG:
+ * Pipeline — sequential, per-department user-approval gated:
  *
  *   RefinedIdea
- *     ├── Market Analysis   } Wave 1 (parallel)
- *     └── Procedure         }
- *          ↓
- *          ├── Procurement  } Wave 2 (parallel — both need Procedure;
- *          └── IP           }         Procurement + IP also use Market)
- *                ↓
- *                Finance     Wave 3 (needs Procurement + Market)
- *                  ↓
- *                  Presentation  Wave 4 (aggregates everything)
+ *     └── Market Analysis          ← await user Approve
+ *          └── Procedure OR
+ *              Semiconductor Mfg   ← await user Approve
+ *              (chosen by session.industry — the other is skipped)
+ *               └── Procurement    ← await user Approve
+ *                    └── IP        ← await user Approve
+ *                         └── Finance      ← await user Approve
+ *                              └── Presentation  ← await user Approve
+ *
+ * Only ONE department runs at a time. After every department finishes
+ * its internal debate, the pipeline halts with the artifact in
+ * `awaiting_approval` and does not advance until the user calls
+ * `approveArtifact()` (or `reviseArtifact()` to re-run with feedback).
+ * Departments may also halt mid-run for user clarifications; see
+ * `submitClarifications()`.
  * ────────────────────────────────────────────────────────────────────────── */
 
+/**
+ * Canonical linear order used for rendering AND for the sequential
+ * driver's "what to do next" logic. Both `procedure` and
+ * `semiconductor` appear here so the client can render a stable
+ * topology, but only ONE of them actually runs per session — see
+ * `processKindFor(session.industry)`.
+ */
 const ORDER: DocumentKind[] = [
   "market",
   "procedure",
@@ -603,240 +815,487 @@ export function processKindFor(industry: SessionIndustry | undefined): DocumentK
   return industry === "semiconductor" ? "semiconductor" : "procedure";
 }
 
+/**
+ * The strictly-sequential order the driver will actually execute for
+ * this session — one department at a time. The inactive process kind
+ * (procedure vs semiconductor) is dropped entirely.
+ */
+export function sequentialOrderFor(session: ArchitectureSession): DocumentKind[] {
+  const processKind = processKindFor(session.industry);
+  const skipped: DocumentKind = processKind === "procedure" ? "semiconductor" : "procedure";
+  return ORDER.filter((k) => k !== skipped);
+}
+
+/**
+ * True iff a department is considered "done" — either fully approved
+ * or errored and won't be retried. Used by `advancePipeline` to find
+ * the next stage to work on.
+ */
+function isStageSettled(a: DocumentArtifact | undefined): boolean {
+  if (!a) return false;
+  return a.approvalStatus === "approved" || !!a.error;
+}
+
+/**
+ * True while a department is holding the pipeline open — either mid-
+ * debate, waiting on clarifications, or waiting on approval. The
+ * driver refuses to schedule a new stage while any prior stage is in
+ * one of these transitional states.
+ */
+function isStageBusyOrWaiting(a: DocumentArtifact | undefined): boolean {
+  if (!a) return false;
+  return (
+    a.approvalStatus === "generating" ||
+    a.approvalStatus === "awaiting_clarification" ||
+    a.approvalStatus === "awaiting_approval" ||
+    a.approvalStatus === "revising"
+  );
+}
+
+/**
+ * The next department that needs work (either to be started for the
+ * first time, or to be resumed after clarifications). Returns
+ * `undefined` when every configured department is settled — that's
+ * the pipeline-complete signal.
+ */
+function nextEligibleStage(
+  session: ArchitectureSession,
+): { kind: DocumentKind; resume: boolean } | undefined {
+  const teams = new Map<DocumentKind, StageTeam>();
+  for (const t of session.specialists.teams) teams.set(t.kind, t);
+  const artByKind = ensureUpstreamMap(session);
+  const order = sequentialOrderFor(session);
+  for (const kind of order) {
+    if (!teams.has(kind)) continue;
+    const a = artByKind.get(kind);
+    if (isStageSettled(a)) continue;
+    if (a && a.approvalStatus === "awaiting_clarification") {
+      // Waiting on the user — do not auto-run.
+      return undefined;
+    }
+    if (a && a.approvalStatus === "awaiting_approval") {
+      // Waiting on the user — do not auto-run.
+      return undefined;
+    }
+    // Either brand-new (not_started) or `revising`: needs a fresh run.
+    return { kind, resume: false };
+  }
+  return undefined;
+}
+
+/** Persist the session in place with the update timestamp bumped. */
+async function persistSession(session: ArchitectureSession): Promise<void> {
+  reorderArtifacts(session);
+  session.updatedAt = new Date().toISOString();
+  await history.upsert(session);
+}
+
+/**
+ * Prepare (or reset) the artifact record for a fresh debate cycle on
+ * this stage. Preserves user-facing history — revisions, prior
+ * clarifications+answers, cumulative revisionCount — while clearing
+ * the mutable per-cycle fields (rounds, content, terminatedBy) so the
+ * new debate starts clean.
+ */
+function beginStageArtifact(
+  session: ArchitectureSession,
+  team: StageTeam,
+  cycleN: number,
+): DocumentArtifact {
+  const prev = session.artifacts.find((a) => a.kind === team.kind);
+  const lead = team.members[0]!;
+  const startedAt = new Date().toISOString();
+  const artifact: DocumentArtifact = {
+    kind: team.kind,
+    title: TITLES[team.kind],
+    content: "",
+    producedBy: lead.id,
+    createdAt: startedAt,
+    streaming: true,
+    rounds: [],
+    finalAgreements: {},
+    startedAt,
+    approvalStatus: "generating",
+    revisions: prev?.revisions ?? [],
+    revisionCount: cycleN - 1,
+    clarifications: prev?.clarifications ?? [],
+    clarificationAnswers: prev?.clarificationAnswers ?? [],
+  };
+  upsertArtifact(session, artifact);
+  return artifact;
+}
+
+/**
+ * Roll the artifact into `awaiting_approval` after the debate has
+ * ended, save, and emit the corresponding events. The pipeline then
+ * pauses until the user calls approve/revise.
+ */
+async function finalizeForApproval(
+  session: ArchitectureSession,
+  artifact: DocumentArtifact,
+  emit: Emit,
+): Promise<void> {
+  artifact.approvalStatus = "awaiting_approval";
+  artifact.streaming = false;
+  session.status = "awaiting_user";
+  await persistSession(session);
+  emit({ type: "artifact.completed", artifact });
+  emit({ type: "artifact.awaiting_approval", kind: artifact.kind, artifact });
+}
+
+/**
+ * Handle a stage error: record it on the artifact, mark session
+ * `awaiting_user` (so the client can render the failure and the user
+ * can choose to skip / retry), and emit `artifact.error`. We do NOT
+ * mark the whole session as errored — a single failed department
+ * shouldn't abort the entire run when downstream departments can
+ * still run.
+ */
+async function failStage(
+  session: ArchitectureSession,
+  team: StageTeam,
+  artifact: DocumentArtifact,
+  message: string,
+  emit: Emit,
+): Promise<void> {
+  artifact.error = message;
+  artifact.approvalStatus = "error";
+  artifact.streaming = false;
+  artifact.endedAt = new Date().toISOString();
+  artifact.durationMs = diffMs(artifact.startedAt, artifact.endedAt);
+  artifact.terminatedBy = "error";
+  if (artifact.durationMs !== undefined) {
+    ensureDurations(session).perTeam[team.kind] = artifact.durationMs;
+  }
+  session.status = "awaiting_user";
+  await persistSession(session);
+  emit({ type: "artifact.error", kind: team.kind, message });
+}
+
+/**
+ * Run one department end-to-end (or as far as it can go before it
+ * needs user input). Handles both fresh cycles and revision cycles —
+ * `beginStageArtifact` gets called and everything runs from round 1.
+ * If round 1 yields clarifications the function returns immediately
+ * (paused); the caller must wait for the user to answer via
+ * `submitClarifications()`.
+ */
+async function executeStage(
+  session: ArchitectureSession,
+  kind: DocumentKind,
+  docTexts: { filename: string; text: string }[],
+  emit: Emit,
+): Promise<void> {
+  if (!session.refinedIdea) {
+    throw new Error("Cannot generate artifacts before the idea is locked.");
+  }
+  const team = session.specialists.teams.find((t) => t.kind === kind);
+  if (!team) {
+    // The team was configured off — nothing to do; the driver will
+    // simply skip past it on the next iteration.
+    return;
+  }
+  if (team.members.length < team.minMembers) {
+    throw new Error(
+      `Team for ${TITLES[team.kind]} needs at least ${team.minMembers} member(s); got ${team.members.length}.`,
+    );
+  }
+
+  const cycleN = (session.artifacts.find((a) => a.kind === kind)?.revisionCount ?? 0) + 1;
+  const artifact = beginStageArtifact(session, team, cycleN);
+  session.status = "generating";
+  await persistSession(session);
+  emit({
+    type: "artifact.started",
+    kind,
+    memberIds: team.members.map((m) => m.id),
+    leadId: team.members[0]!.id,
+    title: TITLES[kind],
+    revisionCycle: cycleN,
+  });
+
+  try {
+    const refinedConcept = session.refinedIdea.content;
+    const upstream = upstreamFor(session);
+
+    const { nextStep } = await runRound1(
+      session,
+      team,
+      refinedConcept,
+      upstream,
+      docTexts,
+      artifact,
+      emit,
+    );
+    await persistSession(session);
+    if (nextStep === "paused") {
+      // Clarifications block — halt the debate and wait for the user.
+      session.status = "awaiting_user";
+      await persistSession(session);
+      return;
+    }
+    await runRoundsAfterOne(
+      session,
+      team,
+      refinedConcept,
+      upstream,
+      docTexts,
+      session.settings,
+      artifact,
+      emit,
+    );
+    await finalizeForApproval(session, artifact, emit);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await failStage(session, team, artifact, message, emit);
+  }
+}
+
+/**
+ * Resume a stage that was paused for user clarifications: runs rounds
+ * 2..N (round 1 drafts already exist on the artifact) and then
+ * finalises for approval.
+ */
+async function resumeStageAfterClarification(
+  session: ArchitectureSession,
+  kind: DocumentKind,
+  docTexts: { filename: string; text: string }[],
+  emit: Emit,
+): Promise<void> {
+  const team = session.specialists.teams.find((t) => t.kind === kind);
+  if (!team || !session.refinedIdea) return;
+  const artifact = session.artifacts.find((a) => a.kind === kind);
+  if (!artifact) return;
+
+  artifact.approvalStatus = "generating";
+  artifact.streaming = true;
+  session.status = "generating";
+  await persistSession(session);
+
+  try {
+    await runRoundsAfterOne(
+      session,
+      team,
+      session.refinedIdea.content,
+      upstreamFor(session),
+      docTexts,
+      session.settings,
+      artifact,
+      emit,
+    );
+    await finalizeForApproval(session, artifact, emit);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await failStage(session, team, artifact, message, emit);
+  }
+}
+
+/** Mark the pipeline complete and emit the terminal session event. */
+async function finalizePipeline(
+  session: ArchitectureSession,
+  emit: Emit,
+): Promise<void> {
+  session.status = "completed";
+  session.endedAt = new Date().toISOString();
+  const totalMs = diffMs(session.createdAt, session.endedAt);
+  if (totalMs !== undefined) ensureDurations(session).totalMs = totalMs;
+  await persistSession(session);
+  emit({ type: "session.completed", session });
+}
+
 export interface GenerateInput {
   session: ArchitectureSession;
   docTexts: { filename: string; text: string }[];
 }
 
-export async function runGeneration(
+/**
+ * Sequential driver. Runs stages one at a time, pausing before each
+ * user gate. Safe to call repeatedly:
+ *   - If a stage is currently generating, the guard at the top short-
+ *     circuits — we never double-schedule.
+ *   - If a stage is awaiting_user (clarification or approval), we do
+ *     nothing and let the user drive.
+ *   - Otherwise we execute the next eligible stage.
+ *
+ * The pipeline is complete when there's no next stage AND no stage is
+ * still transitional — at that point we mark the session done.
+ */
+export async function advancePipeline(
   input: GenerateInput,
   emit: Emit,
-): Promise<ArchitectureSession> {
+): Promise<void> {
   const { session, docTexts } = input;
   if (!session.refinedIdea) {
     throw new Error("Cannot generate artifacts before the idea is locked.");
   }
-
-  session.status = "generating";
-  session.artifacts = [];
-  await history.upsert(session);
-
-  const teams = new Map<DocumentKind, StageTeam>();
-  for (const t of session.specialists.teams) teams.set(t.kind, t);
-
-  const artifacts = new Map<DocumentKind, DocumentArtifact>();
-
-  const persistArtifacts = async () => {
-    session.artifacts = ORDER.map((k) => artifacts.get(k)).filter(
-      (a): a is DocumentArtifact => !!a,
-    );
-    session.updatedAt = new Date().toISOString();
-    await history.upsert(session);
-  };
-
-  const runStage = async (kind: DocumentKind): Promise<DocumentArtifact | null> => {
-    const team = teams.get(kind);
-    if (!team) return null;
-
-    // Track the stage start here — mirrored by the `stageStartedAt` inside
-    // `runStageDebate` — so that the streaming placeholder we persist on
-    // every round callback carries a stable `startedAt` value the UI can
-    // use to render live elapsed time.
-    const stageStartedAt = new Date().toISOString();
-
-    try {
-      const upstream: UpstreamArtifacts = {
-        market: artifacts.get("market"),
-        procedure: artifacts.get("procedure"),
-        semiconductor: artifacts.get("semiconductor"),
-        procurement: artifacts.get("procurement"),
-        ip: artifacts.get("ip"),
-        finance: artifacts.get("finance"),
-      };
-      const artifact = await runStageDebate(
-        session,
-        team,
-        session.refinedIdea!.content,
-        upstream,
-        session.settings,
-        docTexts,
-        async (rounds) => {
-          // Persist a streaming placeholder so history is always up-to-date.
-          // We stamp `startedAt` on it — but NOT `endedAt` — so consumers
-          // know the stage is still in flight and can compute a live
-          // duration against wall-clock now().
-          const placeholder: DocumentArtifact = {
-            kind,
-            title: TITLES[kind],
-            content:
-              rounds[rounds.length - 1]?.drafts.find(
-                (d) => d.memberId === team.members[0]!.id,
-              )?.content ?? "",
-            producedBy: team.members[0]!.id,
-            createdAt: new Date().toISOString(),
-            streaming: true,
-            rounds,
-            finalAgreements: {},
-            startedAt: stageStartedAt,
-          };
-          artifacts.set(kind, placeholder);
-          await persistArtifacts();
-        },
-        emit,
-      );
-      artifacts.set(kind, artifact);
-      await persistArtifacts();
-      emit({ type: "artifact.completed", artifact });
-      return artifact;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const stageEndedAt = new Date().toISOString();
-      const durationMs = diffMs(stageStartedAt, stageEndedAt);
-      // Even failed stages consumed wall-clock time — we record it so
-      // operators can see which department blew up and how long it took
-      // before it did.
-      if (durationMs !== undefined) {
-        ensureDurations(session).perTeam[kind] = durationMs;
-      }
-      const failed: DocumentArtifact = {
-        kind,
-        title: TITLES[kind],
-        content: "",
-        producedBy: team.members[0]?.id ?? "",
-        createdAt: stageEndedAt,
-        error: message,
-        rounds: [],
-        terminatedBy: "error",
-        finalAgreements: {},
-        startedAt: stageStartedAt,
-        endedAt: stageEndedAt,
-        durationMs,
-      };
-      artifacts.set(kind, failed);
-      await persistArtifacts();
-      emit({ type: "artifact.error", kind, message });
-      return null;
+  // Guard: refuse to schedule while any stage is currently transitional.
+  // This makes the function idempotent — a burst of approval clicks
+  // won't spin up parallel departments.
+  for (const a of session.artifacts) {
+    if (a.approvalStatus === "generating" || a.approvalStatus === "revising") {
+      return;
     }
-  };
-
-  try {
-    // Pick the process artifact for this run — procedure (chemical /
-    // pharma / other) vs semiconductor (chip projects). The other
-    // department is skipped for the whole run, even if the team is
-    // configured. This mirrors the mutual-exclusivity of §2
-    // Industry in the Refined Concept.
-    const processKind: DocumentKind = processKindFor(session.industry);
-    const skippedProcessKind: DocumentKind =
-      processKind === "procedure" ? "semiconductor" : "procedure";
-
-    // Wave 1 — Market + (Procedure OR Semiconductor) in parallel.
-    // Both operate directly on the Refined Concept.
-    const [market, processArtifact] = await Promise.all([
-      runStage("market"),
-      runStage(processKind),
-    ]);
-
-    // Emit an explicit skip event for the OTHER process artifact so the
-    // UI can label its tile deterministically (rather than leaving it
-    // silently "queued" forever). We only emit this if the team is
-    // actually configured — a session that never had a semiconductor
-    // team shouldn't get a spurious event for it.
-    if (teams.has(skippedProcessKind)) {
-      const reason =
-        processKind === "semiconductor"
-          ? "Procedure skipped — this run was classified as a semiconductor project, so the Semiconductor Manufacturing department ran instead."
-          : "Semiconductor Manufacturing skipped — this run was classified as a chemical / pharma project, so the Procedure department ran instead.";
-      emit({
-        type: "artifact.error",
-        kind: skippedProcessKind,
-        message: reason,
-      });
-    }
-
-    // Wave 2 — Procurement + IP in parallel. Both need the process
-    // artifact from Wave 1 (whichever one ran). Procurement
-    // additionally leans on Market for scale sizing; IP leans on
-    // Market for jurisdictions. If the process artifact failed we skip both.
-    let procurement: DocumentArtifact | null = null;
-    let ip: DocumentArtifact | null = null;
-    if (teams.has("procurement") || teams.has("ip")) {
-      if (!processArtifact) {
-        const processLabel =
-          processKind === "semiconductor" ? "Semiconductor Manufacturing" : "Procedure";
-        if (teams.has("procurement")) {
-          emit({
-            type: "artifact.error",
-            kind: "procurement",
-            message: `Procurement skipped — ${processLabel} is required upstream and it failed or was disabled.`,
-          });
-        }
-        if (teams.has("ip")) {
-          emit({
-            type: "artifact.error",
-            kind: "ip",
-            message: `IP analysis skipped — ${processLabel} is required upstream and it failed or was disabled.`,
-          });
-        }
-      } else {
-        const [proc, ipRes] = await Promise.all([
-          teams.has("procurement") ? runStage("procurement") : Promise.resolve(null),
-          teams.has("ip") ? runStage("ip") : Promise.resolve(null),
-        ]);
-        procurement = proc;
-        ip = ipRes;
-      }
-    }
-
-    // Wave 3 — Finance (needs Procurement + Market).
-    let finance: DocumentArtifact | null = null;
-    if (teams.has("finance")) {
-      if (procurement && market) {
-        finance = await runStage("finance");
-      } else {
-        emit({
-          type: "artifact.error",
-          kind: "finance",
-          message:
-            "Finance skipped — Procurement and Market Analysis are both required upstream.",
-        });
-      }
-    }
-
-    // Wave 4 — Presentation (aggregates everything; runs even if some upstream failed, so long as at least one artifact exists).
-    if (teams.has("presentation")) {
-      const anyUpstream = market || processArtifact || procurement || ip || finance;
-      if (anyUpstream) {
-        await runStage("presentation");
-      } else {
-        emit({
-          type: "artifact.error",
-          kind: "presentation",
-          message:
-            "Presentation skipped — no upstream artifacts were produced.",
-        });
-      }
-    }
-
-    session.status = "completed";
-    session.endedAt = new Date().toISOString();
-    const totalMs = diffMs(session.createdAt, session.endedAt);
-    if (totalMs !== undefined) ensureDurations(session).totalMs = totalMs;
-    await persistArtifacts();
-    emit({ type: "session.completed", session });
-    return session;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    session.status = "error";
-    session.error = message;
-    // Even on error we record wall-clock — an "it took 8 minutes to blow
-    // up in Finance" signal is often the most actionable data point.
-    session.endedAt = new Date().toISOString();
-    const totalMs = diffMs(session.createdAt, session.endedAt);
-    if (totalMs !== undefined) ensureDurations(session).totalMs = totalMs;
-    await persistArtifacts();
-    emit({ type: "session.error", message });
-    throw err;
   }
+  const next = nextEligibleStage(session);
+  if (!next) {
+    // If nothing is transitional and nothing is next, the pipeline is
+    // fully done — flip to completed if we haven't already.
+    const stillPending = session.artifacts.some(
+      (a) => a.approvalStatus === "awaiting_approval" || a.approvalStatus === "awaiting_clarification",
+    );
+    if (!stillPending && session.status !== "completed") {
+      await finalizePipeline(session, emit);
+    }
+    return;
+  }
+  await executeStage(session, next.kind, docTexts, emit);
+  // Auto-advance would be the wrong call here — the just-executed
+  // stage either paused for clarifications or paused for approval.
+  // In both cases we exit and wait for the user to unblock us.
+}
+
+/**
+ * Public entry: user hit "Approve" on this stage's artifact. Mark it
+ * approved, then auto-advance to the next department. The next call
+ * will start executing immediately (auto-advance mode).
+ */
+export async function approveArtifact(
+  session: ArchitectureSession,
+  kind: DocumentKind,
+  docTexts: { filename: string; text: string }[],
+  emit: Emit,
+): Promise<void> {
+  const artifact = session.artifacts.find((a) => a.kind === kind);
+  if (!artifact) throw new Error(`No artifact for ${kind} yet`);
+  if (artifact.approvalStatus !== "awaiting_approval") {
+    throw new Error(
+      `Cannot approve ${TITLES[kind]} — status is ${artifact.approvalStatus ?? "unknown"}, not awaiting_approval.`,
+    );
+  }
+  artifact.approvalStatus = "approved";
+  artifact.approvedAt = new Date().toISOString();
+  session.status = "generating";
+  await persistSession(session);
+  emit({ type: "artifact.approved", kind, artifact });
+  await advancePipeline({ session, docTexts }, emit);
+}
+
+/**
+ * Public entry: user hit "Revise" with feedback on this stage's
+ * artifact. Record the feedback as a new `UserRevisionRequest`, kick
+ * a fresh debate cycle (round 1 → clarifications OR rounds 2..N) on
+ * the SAME department with the feedback baked into the prompts, and
+ * eventually pause for approval again.
+ *
+ * Downstream departments that were already approved are NOT
+ * automatically re-run — the user can Revise them again after they
+ * see the new upstream artifact if desired.
+ */
+export async function reviseArtifact(
+  session: ArchitectureSession,
+  kind: DocumentKind,
+  feedback: string,
+  docTexts: { filename: string; text: string }[],
+  emit: Emit,
+): Promise<void> {
+  const trimmed = feedback.trim();
+  if (!trimmed) throw new Error("Revision feedback cannot be empty.");
+  const artifact = session.artifacts.find((a) => a.kind === kind);
+  if (!artifact) throw new Error(`No artifact for ${kind} yet`);
+  if (artifact.approvalStatus !== "awaiting_approval" && artifact.approvalStatus !== "error") {
+    throw new Error(
+      `Cannot revise ${TITLES[kind]} — status is ${artifact.approvalStatus ?? "unknown"}.`,
+    );
+  }
+  const revisions = artifact.revisions ?? [];
+  const nextN = revisions.length + 1;
+  const revision: UserRevisionRequest = {
+    n: nextN,
+    feedback: trimmed,
+    requestedAt: new Date().toISOString(),
+  };
+  artifact.revisions = [...revisions, revision];
+  artifact.revisionCount = artifact.revisions.length;
+  artifact.approvalStatus = "revising";
+  session.status = "generating";
+  await persistSession(session);
+  emit({ type: "artifact.revising", kind, feedback: trimmed, revisionCycle: nextN + 1 });
+
+  // Kick a fresh cycle for this stage. `executeStage` will reset the
+  // artifact's rounds/content while preserving the revision history
+  // and any prior clarification Q&A.
+  await executeStage(session, kind, docTexts, emit);
+}
+
+/**
+ * Public entry: user answered the clarifications the department
+ * raised after round 1. Store the answers on the artifact, mark the
+ * stage back to generating, and resume rounds 2..N.
+ *
+ * Skipped/blank answers are allowed — the department is instructed
+ * (via its prompt) to fall back to a documented assumption when the
+ * user declines to answer.
+ */
+export async function submitClarifications(
+  session: ArchitectureSession,
+  kind: DocumentKind,
+  answers: ClarificationAnswer[],
+  docTexts: { filename: string; text: string }[],
+  emit: Emit,
+): Promise<void> {
+  const artifact = session.artifacts.find((a) => a.kind === kind);
+  if (!artifact) throw new Error(`No artifact for ${kind} yet`);
+  if (artifact.approvalStatus !== "awaiting_clarification") {
+    throw new Error(
+      `Cannot submit clarifications for ${TITLES[kind]} — status is ${artifact.approvalStatus ?? "unknown"}.`,
+    );
+  }
+  const knownIds = new Set((artifact.clarifications ?? []).map((c) => c.id));
+  const filtered = answers.filter((a) => knownIds.has(a.requestId));
+  const merged = [
+    ...(artifact.clarificationAnswers ?? []).filter(
+      (a) => !filtered.some((f) => f.requestId === a.requestId),
+    ),
+    ...filtered.map((a) => ({
+      ...a,
+      answeredAt: a.answeredAt || new Date().toISOString(),
+    })),
+  ];
+  artifact.clarificationAnswers = merged;
+  await persistSession(session);
+  emit({ type: "artifact.clarification.answered", kind, answers: merged });
+  await resumeStageAfterClarification(session, kind, docTexts, emit);
+}
+
+/**
+ * Convenience: kick off the pipeline from scratch (or restart it
+ * after a reset). Alias for `advancePipeline` with fresh state — used
+ * by the /lock and /generate endpoints. Never throws for individual
+ * stage errors; those are captured on the artifact and surfaced via
+ * `artifact.error` events.
+ */
+export async function startGeneration(
+  input: GenerateInput,
+  emit: Emit,
+): Promise<void> {
+  const { session } = input;
+  session.status = "generating";
+  await persistSession(session);
+  await advancePipeline(input, emit);
+}
+
+/**
+ * Reset every artifact on the session so a fresh generation run
+ * starts clean. Used by /generate to "regenerate everything". The
+ * user's approval on any prior artifacts is discarded — a full
+ * regenerate implies "start over".
+ */
+export async function resetArtifacts(session: ArchitectureSession): Promise<void> {
+  session.artifacts = [];
+  session.status = "locked";
+  session.endedAt = undefined;
+  if (session.durations) session.durations.perTeam = {};
+  await persistSession(session);
 }
 
 /* ────────────────────────────────────────────────────────────────────────── *

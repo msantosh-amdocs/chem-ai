@@ -277,4 +277,54 @@ describe("derivePipelineNodeStatus", () => {
       }),
     ).toBe("done");
   });
+
+  it("returns 'awaiting_approval' via live flag or artifact status", () => {
+    // Via the live-flag set (SSE-driven path)
+    expect(
+      derivePipelineNodeStatus({
+        kind: "market",
+        team: makeTeam("market"),
+        artifact: makeArtifact("market", "draft"),
+        ...emptyLive,
+        liveAwaitingApproval: new Set(["market"]),
+      }),
+    ).toBe("awaiting_approval");
+    // Via server-persisted approvalStatus (page-reload / cold-open path)
+    const art = makeArtifact("market", "draft");
+    art.approvalStatus = "awaiting_approval";
+    expect(
+      derivePipelineNodeStatus({
+        kind: "market",
+        team: makeTeam("market"),
+        artifact: art,
+        ...emptyLive,
+      }),
+    ).toBe("awaiting_approval");
+  });
+
+  it("returns 'awaiting_clarification' and prefers it over 'running'", () => {
+    expect(
+      derivePipelineNodeStatus({
+        kind: "market",
+        team: makeTeam("market"),
+        artifact: makeArtifact("market"),
+        ...emptyLive,
+        liveGenerating: new Set(["market"]),
+        liveAwaitingClarification: new Set(["market"]),
+      }),
+    ).toBe("awaiting_clarification");
+  });
+
+  it("counts an approved artifact as 'done'", () => {
+    const art = makeArtifact("market", "final");
+    art.approvalStatus = "approved";
+    expect(
+      derivePipelineNodeStatus({
+        kind: "market",
+        team: makeTeam("market"),
+        artifact: art,
+        ...emptyLive,
+      }),
+    ).toBe("done");
+  });
 });

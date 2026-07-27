@@ -61,6 +61,9 @@ export function useConnectorActions() {
       submitRefinement: s.submitRefinement,
       lockIdea: s.lockIdea,
       regenerate: s.regenerate,
+      approveStage: s.approveStage,
+      reviseStage: s.reviseStage,
+      answerClarifications: s.answerClarifications,
     })),
   );
 }

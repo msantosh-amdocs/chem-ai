@@ -1195,7 +1195,86 @@ ${up.finance?.content || missing("Finance")}`;
  * Debate prompts
  * ────────────────────────────────────────────────────────────────────────── */
 
-/** Round 1: each team member writes their initial draft independently. */
+/**
+ * Optional context that the caller can splice into stage prompts to
+ * carry state that only exists on iteration ≥ 2 of a department —
+ * clarifying-question answers, previous rejected draft, and the user's
+ * revision feedback. All fields are optional so first-pass callers can
+ * simply omit the argument.
+ */
+export interface StagePromptContext {
+  /**
+   * Free-form feedback the user submitted on the previous draft when
+   * they clicked "Revise". Present only from revision cycle ≥ 2.
+   */
+  userFeedback?: string;
+  /**
+   * The full previous artifact (as approved-or-rejected). Included so
+   * the department knows what they produced last time and can address
+   * the user's feedback point-by-point rather than starting from
+   * scratch.
+   */
+  prevArtifact?: string;
+  /**
+   * Resolved clarification Q&A raised by this department and answered
+   * by the user, injected as extra ground truth for every subsequent
+   * round.
+   */
+  clarifications?: Array<{ question: string; answer: string }>;
+  /**
+   * 1-indexed revision cycle number. 1 = first pass, ≥ 2 = user asked
+   * for a revision. Used to nudge the model to prioritise addressing
+   * user feedback on later cycles.
+   */
+  revisionCycle?: number;
+}
+
+function feedbackBlock(ctx?: StagePromptContext): string {
+  if (!ctx?.userFeedback?.trim()) return "";
+  return `\n--- USER FEEDBACK ON YOUR PREVIOUS SUBMISSION (revision cycle ${ctx.revisionCycle ?? 2}) ---
+The user reviewed your previous artifact and asked for changes. Their
+feedback is verbatim below. Treat it as the highest-priority input —
+above your own preferences, above your teammates' opinions, and above
+generic best practices. Every substantive point they raised MUST be
+addressed in this new draft, either by incorporating the change or (if
+you disagree) by explicitly acknowledging their concern and defending
+the alternative with a clear rationale.
+
+"""
+${ctx.userFeedback.trim()}
+"""
+
+--- YOUR PREVIOUS ARTIFACT (which the user rejected) ---
+${(ctx.prevArtifact ?? "").trim() || "(no previous artifact available)"}
+`;
+}
+
+function clarificationsBlock(ctx?: StagePromptContext): string {
+  if (!ctx?.clarifications?.length) return "";
+  const lines = ctx.clarifications
+    .map(
+      (c, i) =>
+        `  ${i + 1}. Q: ${c.question.trim()}\n     A: ${(c.answer.trim() || "(no answer provided — proceed with best judgement and flag as an assumption)")}`,
+    )
+    .join("\n");
+  return `\n--- USER-PROVIDED CLARIFICATIONS (answers to questions your department raised earlier) ---
+These are ground-truth answers to gaps your team surfaced in the first
+round. Treat them as authoritative — they override any prior
+assumptions you or your teammates made about the same subject.
+
+${lines}
+`;
+}
+
+/**
+ * Round 1: each team member writes their initial draft independently.
+ *
+ * The response is a Markdown draft, optionally PREFIXED by a
+ * `<CLARIFICATIONS>...</CLARIFICATIONS>` block containing questions the
+ * member needs the user to answer before the debate can converge.
+ * The orchestrator strips the block, aggregates questions across
+ * teammates, and pauses the department until the user answers.
+ */
 export function stageInitialPrompt(
   member: Specialist,
   teammates: Specialist[],
@@ -1203,8 +1282,15 @@ export function stageInitialPrompt(
   refinedConcept: string,
   upstream: UpstreamArtifacts,
   docs: { filename: string; text: string }[],
+  ctx?: StagePromptContext,
 ): { system: string; user: string } {
   const teammateNames = teammates.map((t) => t.name).join(", ") || "(none — solo)";
+  const cycle = ctx?.revisionCycle ?? 1;
+
+  const revisionEmphasis =
+    cycle > 1
+      ? `\n\nIMPORTANT — This is REVISION CYCLE ${cycle}. The user rejected the previous draft and gave you specific feedback (below). Your first job is to satisfy every point in their feedback; your second job is to keep the artifact rigorous. Do not silently ignore anything they wrote.`
+      : "";
 
   const system = `${personaBlock(member)}
 
@@ -1214,11 +1300,44 @@ Your teammates on this artifact are: ${teammateNames}. In later rounds
 you will critique each other and revise; for THIS first round, produce
 YOUR OWN independent initial draft — do not attempt to guess what your
 teammates will say. Write the strongest ${TITLES[kind]} you can from the
-Refined Concept${upstreamBlock(kind, upstream) ? " and the upstream artifacts" : ""}.
+Refined Concept${upstreamBlock(kind, upstream) ? " and the upstream artifacts" : ""}.${revisionEmphasis}
+
+CLARIFYING QUESTIONS (optional)
+If — and ONLY if — the Refined Concept plus upstream artifacts are
+genuinely ambiguous on a point that would materially change your
+draft, you may prefix your response with a delimited block asking the
+user to clarify. Format EXACTLY as follows (JSON inside XML tags):
+
+<CLARIFICATIONS>
+[
+  {
+    "id": "c1",
+    "question": "Short, self-contained question (one sentence).",
+    "whyItMatters": "One-sentence rationale."
+  }
+]
+</CLARIFICATIONS>
+
+Rules for the block:
+  - Only include it when you truly cannot proceed responsibly without
+    an answer. If you can make a reasonable assumption and flag it in
+    Open Questions, DO THAT INSTEAD — do not open the clarification
+    block.
+  - Maximum 3 questions per member. Prefer 0-1.
+  - Do NOT ask about things the analyst has already covered in the
+    Refined Concept, or that a teammate could plausibly know without
+    the user.
+  - Never ask the user to do research (patent lookups, market sizing,
+    etc.) — those are YOUR job. Only ask about things ONLY the user
+    knows: their preferences, their budget, their target customer,
+    their existing capabilities.
+
+After the (optional) block, produce your Markdown draft directly.
 
 ${structureFor(kind)}
 
-Return Markdown only. No preamble. No JSON.`;
+Return the (optional) CLARIFICATIONS block followed by Markdown only.
+No preamble. No trailing JSON.`;
 
   const upstreamContext = upstreamBlock(kind, upstream);
   const user = `${documentBlock(docs)}
@@ -1227,8 +1346,9 @@ Return Markdown only. No preamble. No JSON.`;
 ${refinedConcept}
 
 ${upstreamContext}
+${clarificationsBlock(ctx)}${feedbackBlock(ctx)}
 
-Produce your initial draft of the ${TITLES[kind]} now.`;
+Produce your initial draft of the ${TITLES[kind]} now${cycle > 1 ? ", addressing the user feedback above" : ""}.`;
 
   return { system, user };
 }
@@ -1249,8 +1369,14 @@ export function stageReviseAndScorePrompt(
   docs: { filename: string; text: string }[],
   threshold: number,
   roundN: number,
+  ctx?: StagePromptContext,
 ): { system: string; user: string } {
   const teammateNames = teammates.map((t) => t.name).join(", ");
+  const cycle = ctx?.revisionCycle ?? 1;
+  const revisionEmphasis =
+    cycle > 1
+      ? `\n\nIMPORTANT — This is REVISION CYCLE ${cycle}. The user rejected the previous end-of-department artifact and gave specific feedback (see USER FEEDBACK block in the user message). Every round in this cycle MUST make measurable progress on that feedback.`
+      : "";
 
   const system = `${personaBlock(member)}
 
@@ -1278,7 +1404,7 @@ teammates are: ${teammateNames}. This is round ${roundN}. Each round you must:
 
 The department stops debating and moves on when EVERY member's score is
 ≥ ${threshold}. If we're already substantively equivalent, feel free to
-report ≥ ${threshold}. Otherwise keep revising honestly.
+report ≥ ${threshold}. Otherwise keep revising honestly.${revisionEmphasis}
 
 OUTPUT
 Return STRICT JSON only, with this exact shape and no extra keys:
@@ -1301,7 +1427,7 @@ ${structureFor(kind)}`;
 ${refinedConcept}
 
 ${upstreamContext}
-
+${clarificationsBlock(ctx)}${feedbackBlock(ctx)}
 --- YOUR PREVIOUS DRAFT (${member.name}) ---
 ${ownPrevDraft}
 

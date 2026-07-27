@@ -4,15 +4,22 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { detectKind, extractText } from "../parsers/index.js";
 import {
+  advancePipeline,
+  approveArtifact,
   createSession,
   lockAndProduceConcept,
-  runGeneration,
+  resetArtifacts,
+  reviseArtifact,
   runRefinementRound,
+  startGeneration,
+  submitClarifications,
+  type SessionEvent,
 } from "../agents/orchestrator.js";
 import { emit, subscribe } from "../agents/bus.js";
 import { history } from "../store/history.js";
 import type {
   ArchitectureSession,
+  ClarificationAnswer,
   ClarifyAnswer,
   DocumentKind,
   UploadedDoc,
@@ -131,8 +138,38 @@ const answersSchema = z.object({
 
 const docTexts = new Map<string, { filename: string; text: string }[]>();
 
-function scheduleDocCleanup(sessionId: string, delayMs = 30 * 60 * 1000): void {
-  setTimeout(() => docTexts.delete(sessionId), delayMs).unref?.();
+/**
+ * Interactive sessions can sit for a long time between user approvals,
+ * so we keep the parsed doc cache alive for the full duration of the
+ * pipeline and only drop it after a terminal event (completed / error
+ * / cancelled). If the process restarts before that, the docs are
+ * gone — regenerate would then run without them, which is degraded
+ * but not catastrophic (they're intended as extra context, not the
+ * source of truth).
+ */
+function scheduleDocCleanupAfterTerminal(sessionId: string): void {
+  // Wait 5 minutes past the terminal event before dropping the cache —
+  // long enough for a quick "regenerate" click, short enough that
+  // abandoned sessions don't leak memory indefinitely.
+  setTimeout(() => docTexts.delete(sessionId), 5 * 60 * 1000).unref?.();
+}
+
+/** Fire-and-forget wrapper around a pipeline action that emits + logs errors. */
+function runInBackground(
+  sessionId: string,
+  action: () => Promise<void>,
+  label: string,
+): void {
+  void (async () => {
+    try {
+      await action();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`${label} failed:`, err);
+      const failEvent: SessionEvent = { type: "session.error", message };
+      emit(sessionId, failEvent);
+    }
+  })();
 }
 
 /* ────────────────────────────────────────────────────────────────────────── *
@@ -214,6 +251,16 @@ router.post(
         documents,
         docTexts: parsed,
       });
+      // Watch the bus for terminal events so we can free the parsed-
+      // doc cache 5 minutes after the pipeline actually finishes — the
+      // interactive approval gates mean we can no longer schedule
+      // cleanup from any single route handler.
+      const sub = subscribe(sessionId, (e) => {
+        if (e.type === "session.completed" || e.type === "session.error") {
+          scheduleDocCleanupAfterTerminal(sessionId);
+          sub.close();
+        }
+      });
       emit(sessionId, { type: "session", session });
 
       res.json({ sessionId, session });
@@ -282,18 +329,18 @@ router.post("/session/:id/lock", async (req: Request, res: Response, next) => {
     );
 
     if (body.autoGenerate) {
-      void (async () => {
-        try {
-          await runGeneration(
+      // Interactive pipeline: kick off the first department. The driver
+      // stops after each stage until the user approves; subsequent
+      // stages start via the /approve endpoint below.
+      runInBackground(
+        sessionId,
+        () =>
+          startGeneration(
             { session, docTexts: docTexts.get(sessionId) ?? [] },
             (e) => emit(sessionId, e),
-          );
-        } catch (err) {
-          console.error("generation failed", err);
-        } finally {
-          scheduleDocCleanup(sessionId);
-        }
-      })();
+          ),
+        "startGeneration",
+      );
     }
 
     res.json({ session });
@@ -303,7 +350,7 @@ router.post("/session/:id/lock", async (req: Request, res: Response, next) => {
 });
 
 /* ────────────────────────────────────────────────────────────────────────── *
- * POST /session/:id/generate
+ * POST /session/:id/generate — full regenerate (discards prior approvals)
  * ────────────────────────────────────────────────────────────────────────── */
 
 router.post("/session/:id/generate", async (req: Request, res: Response, next) => {
@@ -315,24 +362,132 @@ router.post("/session/:id/generate", async (req: Request, res: Response, next) =
       return res.status(400).json({ error: "idea is not locked yet" });
     }
 
-    void (async () => {
-      try {
-        await runGeneration(
+    // A regenerate wipes everything and starts the interactive
+    // sequential pipeline again from department #1.
+    await resetArtifacts(session);
+    runInBackground(
+      sessionId,
+      () =>
+        startGeneration(
           { session, docTexts: docTexts.get(sessionId) ?? [] },
           (e) => emit(sessionId, e),
-        );
-      } catch (err) {
-        console.error("generation failed", err);
-      } finally {
-        scheduleDocCleanup(sessionId);
-      }
-    })();
+        ),
+      "regenerate",
+    );
 
     res.json({ ok: true, sessionId });
   } catch (err) {
     next(err);
   }
 });
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Per-department gates
+ *   POST /session/:id/stage/:kind/approve
+ *   POST /session/:id/stage/:kind/revise      { feedback }
+ *   POST /session/:id/stage/:kind/clarify     { answers: [{ requestId, answer }] }
+ * ────────────────────────────────────────────────────────────────────────── */
+
+const kindSchema = z.enum([
+  "market",
+  "procedure",
+  "semiconductor",
+  "procurement",
+  "ip",
+  "finance",
+  "presentation",
+]);
+
+const feedbackSchema = z.object({
+  feedback: z.string().trim().min(1, "feedback cannot be empty").max(20_000),
+});
+
+const clarificationsSchema = z.object({
+  answers: z
+    .array(
+      z.object({
+        requestId: z.string().min(1),
+        answer: z.string().default(""),
+      }),
+    )
+    .default([]),
+});
+
+router.post(
+  "/session/:id/stage/:kind/approve",
+  async (req: Request, res: Response, next) => {
+    try {
+      const sessionId = req.params.id;
+      const kind = kindSchema.parse(req.params.kind);
+      const session = await requireSession(sessionId, res);
+      if (!session) return;
+      // Approval is the pipeline's "unblock" signal — auto-advance to the
+      // next department in the background so the API stays responsive.
+      const docs = docTexts.get(sessionId) ?? [];
+      // We run approveArtifact synchronously up to the point where it
+      // records the approval on disk, then let the pipeline advance in
+      // the background. That way the HTTP response reflects the new
+      // artifact state immediately.
+      await approveArtifact(session, kind, docs, (e) => emit(sessionId, e));
+      res.json({ ok: true, session });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  "/session/:id/stage/:kind/revise",
+  async (req: Request, res: Response, next) => {
+    try {
+      const sessionId = req.params.id;
+      const kind = kindSchema.parse(req.params.kind);
+      const body = feedbackSchema.parse(req.body ?? {});
+      const session = await requireSession(sessionId, res);
+      if (!session) return;
+      const docs = docTexts.get(sessionId) ?? [];
+      // Kick off the revision run in the background — running rounds
+      // takes long enough that we do NOT want to block the HTTP
+      // response. The client will pick up the fresh artifact.started
+      // event via SSE.
+      runInBackground(
+        sessionId,
+        () => reviseArtifact(session, kind, body.feedback, docs, (e) => emit(sessionId, e)),
+        "reviseArtifact",
+      );
+      res.json({ ok: true, sessionId });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  "/session/:id/stage/:kind/clarify",
+  async (req: Request, res: Response, next) => {
+    try {
+      const sessionId = req.params.id;
+      const kind = kindSchema.parse(req.params.kind);
+      const body = clarificationsSchema.parse(req.body ?? {});
+      const session = await requireSession(sessionId, res);
+      if (!session) return;
+      const docs = docTexts.get(sessionId) ?? [];
+      const answers: ClarificationAnswer[] = body.answers.map((a) => ({
+        requestId: a.requestId,
+        answer: a.answer,
+        answeredAt: new Date().toISOString(),
+      }));
+      runInBackground(
+        sessionId,
+        () => submitClarifications(session, kind, answers, docs, (e) => emit(sessionId, e)),
+        "submitClarifications",
+      );
+      res.json({ ok: true, sessionId });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 /* ────────────────────────────────────────────────────────────────────────── *
  * GET /session/:id/stream — SSE
