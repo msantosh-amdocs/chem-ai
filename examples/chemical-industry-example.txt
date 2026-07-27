@@ -1,0 +1,26 @@
+Set up a 500 tonnes/year manufacturing unit at Dahej PCPIR, Gujarat, for 2,3-dichloro-5-(trifluoromethyl)pyridine (CAS 69045-84-7), a specialty agrochemical intermediate used in fluazinam and haloxyfop herbicides.
+Grade: 99.5% technical, specification per IS 15884, assay by GC-MS. 
+Route: chlorination of beta-picoline followed by anhydrous-HF fluorination; pilot already validated at 20 kg/batch with IIT-Bombay collaboration.
+
+Industry: specialty chemicals, agrochemical intermediates sub-vertical.
+Scale: 500 t/yr commercial (10 t/day, 5-day continuous campaigns).
+Geography: manufacture at Dahej PCPIR (5-acre allotted plot, greenfield);
+markets = Indian formulators 60% (UPL and Best Agrolife anchor offtake at
+INR 2,650/kg landed), export to Vietnam/Thailand/Indonesia 35%, China
+contract 5%.
+
+CAPEX: INR 85 Cr ceiling (greenfield) + INR 18 Cr working capital.
+Timeline: ground-breaking Q3 FY26, mechanical completion Q1 FY27,
+commissioning Sep 2027, first commercial batch Dec 2027.
+
+Regulatory posture: CPCB Orange-category, GPCB CTE+CTO, PESO chlorine-
+handling licence, Factories Act 1948 registration, DGFASLI fluorine
+handling, CIB&RC insecticide manufacture licence Section 9(3), GST + IEC
+export codes. GPCB effluent spec: TDS <= 2100 mg/L for MEE feed.
+
+Constraints: own Indian patent IN345678 on the dehydrochlorination
+catalyst; 60% offtake PLA signed with UPL + Best Agrolife; Dahej CETP
+slot secured. Anhydrous HF is single-sourced from Navin Fluorine (4-month
+contract). Risks: (1) HF single-source, (2) Chinese exporters at INR
+2,300/kg landed, (3) 5-year expiry window on the anchor herbicide could
+shift downstream demand, (4) CETP capacity slot renewal.
