@@ -1518,6 +1518,80 @@ export async function retryStage(
   await advancePipeline({ session, docTexts }, emit);
 }
 
+/**
+ * One-shot boot recovery for the "server died mid-run" case.
+ *
+ * Runs at process start (from `index.ts`) BEFORE the HTTP server accepts
+ * traffic. Any session that was persisted with status `generating` is a
+ * zombie by definition — no orchestrator is actually running its
+ * pipeline anymore. Without this sweep the UI would show the Stop
+ * button forever on an idle stage.
+ *
+ * We mark any in-flight artifact (approvalStatus `generating` or
+ * `revising`) as `error` with a distinct "Server restarted" message,
+ * flip the owning session to `error`, and record the interruption on
+ * `session.error`. The client's Retry button already understands the
+ * `error` state and will re-run the stage from scratch (preserving
+ * approved upstream stages plus prior revisions + clarification Q&A).
+ *
+ * Sessions in any other status (`refining`, `locked`, `awaiting_user`,
+ * `completed`, `error`, `cancelled`) are left untouched — those states
+ * either have no long-running background work, or already reflect a
+ * user-driven pause that survives restart cleanly.
+ *
+ * The in-memory `docTexts` cache is lost across restarts, so a retry
+ * of a swept stage runs without the originally uploaded docs. The
+ * refined concept and every prior artifact are on disk, so the stage
+ * still runs — the degradation is limited to missing uploaded-doc
+ * context. This is documented in the README's recovery section.
+ *
+ * Idempotent — running it twice on the same disk yields the same
+ * result (second pass finds no `generating` sessions to touch).
+ */
+export async function sweepInterruptedSessions(): Promise<{
+  scanned: number;
+  swept: Array<{ id: string; title: string; kinds: DocumentKind[] }>;
+}> {
+  const all = await history.list();
+  const swept: Array<{ id: string; title: string; kinds: DocumentKind[] }> = [];
+  for (const session of all) {
+    if (session.status !== "generating") continue;
+
+    const affectedKinds: DocumentKind[] = [];
+    const now = new Date().toISOString();
+    for (const a of session.artifacts) {
+      if (
+        a.approvalStatus === "generating" ||
+        a.approvalStatus === "revising"
+      ) {
+        a.approvalStatus = "error";
+        a.error = "Server restarted before this step completed. Click Retry to resume.";
+        a.streaming = false;
+        a.endedAt = now;
+        a.durationMs = diffMs(a.startedAt, a.endedAt);
+        a.terminatedBy = "error";
+        if (a.durationMs !== undefined) {
+          ensureDurations(session).perTeam[a.kind] = a.durationMs;
+        }
+        affectedKinds.push(a.kind);
+      }
+    }
+
+    session.status = "error";
+    session.endedAt = now;
+    session.error =
+      affectedKinds.length > 0
+        ? "Server restarted mid-run. Click Retry on the highlighted stage to resume, or Regenerate to start over."
+        : "Server restarted between stages. Click Retry on the next stage or Regenerate to start over.";
+    const totalMs = diffMs(session.createdAt, session.endedAt);
+    if (totalMs !== undefined) ensureDurations(session).totalMs = totalMs;
+
+    await persistSession(session);
+    swept.push({ id: session.id, title: session.title, kinds: affectedKinds });
+  }
+  return { scanned: all.length, swept };
+}
+
 /* ────────────────────────────────────────────────────────────────────────── *
  * Helpers
  * ────────────────────────────────────────────────────────────────────────── */

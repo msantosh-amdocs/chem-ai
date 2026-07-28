@@ -211,6 +211,27 @@ export function PipelinePage() {
         </div>
       )}
 
+      {currentSession.status === "error" &&
+        currentSession.error?.startsWith("Server restarted") && (
+          <div className="card p-4 border-2 border-amber-200 bg-amber-50 flex items-start gap-3">
+            <div className="text-2xl leading-none">↻</div>
+            <div className="flex-1 min-w-0 text-sm text-amber-900">
+              <div className="font-semibold mb-0.5">Server was restarted mid-run</div>
+              <div className="text-amber-800/90">
+                {currentSession.error} Approved earlier stages are safe on
+                disk; only the interrupted stage needs to be re-run.{" "}
+                {currentSession.documents && currentSession.documents.length > 0 && (
+                  <span className="italic">
+                    Uploaded document context was lost across the restart, so the
+                    retry will run without those docs — the refined concept and
+                    all prior stages remain intact.
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
       {showProgress && (
         <ProgressBar
           pct={progress.pct}

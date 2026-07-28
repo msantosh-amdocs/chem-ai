@@ -117,6 +117,20 @@ Together these cover the "network glitch mid-run" recovery path: if
 a stage fails (or you Stop and want to resume), click Retry on the
 red tile and the pipeline picks up where it left off.
 
+**If the server itself was killed mid-run** (crash, `stop.sh`,
+deploy), the next server start runs a one-shot sweep
+(`sweepInterruptedSessions`) before it accepts traffic. Any session
+that was persisted as `generating` is a zombie by definition — no
+orchestrator is running its pipeline anymore. The sweep marks the
+interrupted stage as errored with the message `Server restarted
+before this step completed. Click Retry to resume.` and flips the
+session to `error`. Open the session and click **Retry** on the
+highlighted tile — approved upstream stages, revisions, and
+clarification Q&A are all preserved. The only degradation is
+uploaded document context (the parsed docs live in an in-memory
+cache and don't survive restart); the refined concept and every
+prior stage are on disk, so the retry still runs.
+
 Every specialist is fully configurable — name, model, tone, role
 description, model parameters, avatar, accent — and persisted to your
 browser's localStorage. Add or remove department members freely, as long
