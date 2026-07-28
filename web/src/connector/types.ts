@@ -373,6 +373,19 @@ export type SessionEvent =
     }
   | { type: "artifact.completed"; artifact: DocumentArtifact }
   | { type: "artifact.error"; kind: DocumentKind; message: string }
+  /**
+   * User clicked Retry on an errored stage. A fresh `artifact.started`
+   * event will follow once the server restarts the debate; the client
+   * uses this event to clear "errored" tile state early so the UI
+   * doesn't flicker "error → generating".
+   */
+  | { type: "artifact.retrying"; kind: DocumentKind; revisionCycle: number }
   | { type: "session.completed"; session: ArchitectureSession }
+  /**
+   * User clicked Stop. Session is now `cancelled`; any stage that was
+   * mid-flight has been recorded as `error: "Cancelled by user"` so
+   * it can be individually retried.
+   */
+  | { type: "session.cancelled"; session: ArchitectureSession }
   | { type: "session.error"; message: string }
   | { type: "stream.end" };

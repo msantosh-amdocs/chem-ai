@@ -99,6 +99,24 @@ Refined Concept (Aarav — asks clarifying Qs if vague, loops until ready)
 Each department may also raise mid-debate **Clarification** questions
 after round 1; the pipeline pauses there too until you answer.
 
+### Stop / Retry (recovery controls)
+
+- **Stop pipeline** (header button, visible while a run is in flight):
+  cancels the current run. The in-flight LLM call finishes in the
+  background (the Cursor SDK can't interrupt a call mid-flight), but
+  the session flips to `cancelled` immediately and the department
+  that was running is recorded as `Cancelled by user`.
+- **Retry stage** (button on any errored / cancelled tile): re-runs
+  just that department. Prior revision history and clarification
+  Q&A are preserved so context is not lost. Once the retried stage
+  finishes, the pipeline continues from there.
+- **Start over** (only visible after a cancel): wipes every artifact
+  and re-runs from department 1.
+
+Together these cover the "network glitch mid-run" recovery path: if
+a stage fails (or you Stop and want to resume), click Retry on the
+red tile and the pipeline picks up where it left off.
+
 Every specialist is fully configurable — name, model, tone, role
 description, model parameters, avatar, accent — and persisted to your
 browser's localStorage. Add or remove department members freely, as long

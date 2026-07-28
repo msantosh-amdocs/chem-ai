@@ -334,6 +334,83 @@ describe("applyEvent (pure reducer)", () => {
     );
     expect(out.closeStream).toBe(true);
   });
+
+  it("clears live flags AND syncs in-flight artifact errors on session.cancelled", () => {
+    // Before the event fires: the user was mid-run — we had a
+    // generating tile and the transient `cancelling` flag was true
+    // (set optimistically by the cancelSession() action).
+    const live = baseLive();
+    live.running = true;
+    live.cancelling = true;
+    live.generating.add("market");
+    // The server-side cancelSession() rewrites any mid-flight artifact
+    // to `error: "Cancelled by user"` and sends the updated session
+    // down the wire in the event payload.
+    const cancelled: ArchitectureSession = {
+      ...baseSession(),
+      status: "cancelled",
+      artifacts: [
+        {
+          kind: "market",
+          title: "Market Analysis",
+          content: "",
+          producedBy: "m1",
+          createdAt: "",
+          rounds: [],
+          finalAgreements: {},
+          approvalStatus: "error",
+          error: "Cancelled by user",
+          terminatedBy: "error",
+        },
+      ],
+    };
+    const out = applyEvent(
+      { session: baseSession(), live },
+      { type: "session.cancelled", session: cancelled },
+    );
+    expect(out.session?.status).toBe("cancelled");
+    // Live flags reset — the run is over.
+    expect(out.live.running).toBe(false);
+    expect(out.live.cancelling).toBe(false);
+    // The cancelled tile is now errored, no longer "generating".
+    expect(out.live.generating.has("market")).toBe(false);
+    expect(out.live.errors.market).toBe("Cancelled by user");
+  });
+
+  it("clears the error banner + status on artifact.retrying (before restart)", () => {
+    // Setup: market previously errored.
+    const live = baseLive();
+    live.errors.market = "boom";
+    const errored: ArchitectureSession = {
+      ...baseSession(),
+      status: "cancelled",
+      artifacts: [
+        {
+          kind: "market",
+          title: "Market Analysis",
+          content: "",
+          producedBy: "m1",
+          createdAt: "",
+          rounds: [],
+          finalAgreements: {},
+          approvalStatus: "error",
+          error: "Cancelled by user",
+        },
+      ],
+    };
+    const out = applyEvent(
+      { session: errored, live },
+      { type: "artifact.retrying", kind: "market", revisionCycle: 1 },
+    );
+    expect(out.live.errors.market).toBeUndefined();
+    // The subsequent artifact.started event will flip the status to
+    // "generating" and add the streaming placeholder; retrying itself
+    // just clears the error state and puts the session back into
+    // "generating" so the header stops showing "cancelled".
+    expect(out.session?.status).toBe("generating");
+    expect(out.session?.artifacts[0]?.error).toBeUndefined();
+    expect(out.session?.artifacts[0]?.approvalStatus).toBe("not_started");
+  });
 });
 
 describe("useStore actions", () => {

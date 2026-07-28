@@ -30,8 +30,15 @@ export function PipelinePage() {
   const currentSession = useCurrentSession();
   const live = useLive();
   const averages = useHistoryAverages();
-  const { setTab, regenerate, approveStage, reviseStage, answerClarifications } =
-    useConnectorActions();
+  const {
+    setTab,
+    regenerate,
+    approveStage,
+    reviseStage,
+    answerClarifications,
+    cancelSession,
+    retryStage,
+  } = useConnectorActions();
 
   // Which artifact's debate trail is currently expanded. Only one at a
   // time — the user opens it explicitly by clicking a tile, which
@@ -147,6 +154,34 @@ export function PipelinePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {(currentSession.status === "generating" ||
+            currentSession.status === "awaiting_user") && (
+            <button
+              className="btn btn-ghost text-rose-700 hover:bg-rose-50"
+              onClick={() => void cancelSession()}
+              disabled={live.cancelling}
+              title="Stop the pipeline. The in-flight LLM call finishes in the background; the current stage becomes errored and can be retried."
+              type="button"
+            >
+              {live.cancelling ? (
+                <>
+                  <Spinner /> Stopping…
+                </>
+              ) : (
+                "■ Stop pipeline"
+              )}
+            </button>
+          )}
+          {currentSession.status === "cancelled" && (
+            <button
+              className="btn btn-ghost"
+              onClick={regenerate}
+              type="button"
+              title="Wipe every artifact and start the pipeline again from department 1"
+            >
+              ↻ Start over
+            </button>
+          )}
           {currentSession.status === "completed" && (
             <>
               <button className="btn btn-ghost" onClick={regenerate}>
@@ -159,6 +194,22 @@ export function PipelinePage() {
           )}
         </div>
       </div>
+
+      {currentSession.status === "cancelled" && (
+        <div className="card p-4 border-2 border-rose-200 bg-rose-50 flex items-start gap-3">
+          <div className="text-2xl leading-none">■</div>
+          <div className="flex-1 min-w-0 text-sm text-rose-900">
+            <div className="font-semibold mb-0.5">Pipeline stopped</div>
+            <div className="text-rose-800/90">
+              You cancelled this run. The department that was in flight is
+              recorded as "Cancelled by user" — click <span className="font-medium">Retry</span>{" "}
+              on its tile below to resume from there, or{" "}
+              <span className="font-medium">Start over</span> in the header to wipe every
+              artifact and re-run from department 1.
+            </div>
+          </div>
+        </div>
+      )}
 
       {showProgress && (
         <ProgressBar
@@ -287,6 +338,13 @@ export function PipelinePage() {
                           now,
                         );
                       const teamAvg = averages?.perTeam?.[kind];
+                      // Only offer a Retry button on stages that
+                      // actually errored (either a real failure or a
+                      // "Cancelled by user" stub from a Stop). We hide
+                      // the button while a retry is in flight so it
+                      // can't be double-clicked.
+                      const isErrored = status === "error";
+                      const retryBusy = live.actionInFlight[kind] === "retry";
                       return (
                         <PipelineNode
                           key={kind}
@@ -305,6 +363,10 @@ export function PipelinePage() {
                           onOpen={() =>
                             setOpenKind((prev) => (prev === kind ? null : kind))
                           }
+                          onRetry={
+                            isErrored ? () => void retryStage(kind) : undefined
+                          }
+                          retryBusy={retryBusy}
                         />
                       );
                     })}

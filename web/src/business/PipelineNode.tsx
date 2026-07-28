@@ -1,7 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, type MouseEvent } from "react";
 import clsx from "clsx";
 import { SpecialistAvatar } from "./SpecialistAvatar";
-import { StatusPill } from "../sandbox";
+import { Spinner, StatusPill } from "../sandbox";
 import type { PipelineNodeStatus } from "./pipeline";
 import { formatCompactDuration, formatDuration } from "./duration";
 import { KIND_LABELS, KIND_SHORT, type DocumentKind } from "../connector/personas";
@@ -34,6 +34,14 @@ interface Props {
   selected?: boolean;
   /** Called when the tile is clicked — parent decides what to reveal. */
   onOpen?: () => void;
+  /**
+   * If set, render a Retry button on the tile (used for errored /
+   * cancelled stages). Clicking it fires the callback WITHOUT
+   * triggering the tile's `onOpen` (event propagation is stopped).
+   */
+  onRetry?: () => void;
+  /** Show a spinner + disable the Retry button while a retry is in flight. */
+  retryBusy?: boolean;
 }
 
 /**
@@ -47,12 +55,15 @@ export function PipelineNode({
   status,
   maxRounds,
   activeMembers,
+  error,
   cost,
   durationMs,
   averageMs,
   averageSamples,
   selected,
   onOpen,
+  onRetry,
+  retryBusy,
 }: Props) {
   const label = KIND_LABELS[kind];
   const done = status === "done";
@@ -98,16 +109,22 @@ export function PipelineNode({
                 ? "bg-amber-50 border-amber-300 shadow-pop"
                 : "bg-white border-slate-200";
 
+  // The tile normally renders as a <button> so keyboard users can open
+  // its debate trail. But when we're going to render an inline Retry
+  // <button> inside, we must NOT nest buttons — fall back to a <div>
+  // wrapper and let the trailing "click to view debate →" hint carry
+  // the open action instead.
   const clickable = !disabled && !skipped && !!onOpen;
-  const Wrapper: "button" | "div" = clickable ? "button" : "div";
+  const asButton = clickable && !onRetry;
+  const Wrapper: "button" | "div" = asButton ? "button" : "div";
 
   return (
     <Wrapper
-      type={clickable ? "button" : undefined}
-      onClick={clickable ? onOpen : undefined}
-      aria-pressed={clickable ? !!selected : undefined}
+      type={asButton ? "button" : undefined}
+      onClick={asButton ? onOpen : undefined}
+      aria-pressed={asButton ? !!selected : undefined}
       title={
-        clickable
+        asButton
           ? selected
             ? `Close ${KIND_LABELS[kind]} debate`
             : `Open ${KIND_LABELS[kind]} debate`
@@ -116,7 +133,7 @@ export function PipelineNode({
       className={clsx(
         "border-2 rounded-xl p-3 w-[260px] transition-all text-left",
         bg,
-        clickable && "hover:shadow-pop focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-slate-400",
+        asButton && "hover:shadow-pop focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-slate-400",
         selected && "ring-2 ring-indigo-500 ring-offset-1",
       )}
     >
@@ -249,10 +266,61 @@ export function PipelineNode({
               </span>
             </div>
           )}
-          {clickable && (
-            <div className="mt-1 text-[10px] text-slate-400">
-              {selected ? "▼ debate open" : "click to view debate →"}
+          {status === "error" && (error || artifact?.error) && (
+            <div
+              className="mt-1.5 text-[11px] text-rose-800 bg-rose-100/70 border border-rose-200 rounded px-2 py-1"
+              title={error ?? artifact?.error}
+            >
+              <span className="font-medium">Failed:</span>{" "}
+              <span className="line-clamp-2">{error ?? artifact?.error}</span>
             </div>
+          )}
+          {onRetry && (
+            <div className="mt-2">
+              <button
+                type="button"
+                className="w-full text-xs font-medium rounded-md px-2 py-1.5 border border-rose-300 bg-white text-rose-800 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-400 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1.5"
+                onClick={(e: MouseEvent<HTMLButtonElement>) => {
+                  // Don't ALSO trigger the tile-open handler on the
+                  // parent button — retry is its own action.
+                  e.stopPropagation();
+                  onRetry();
+                }}
+                disabled={retryBusy}
+                title="Re-run this department; prior revision + clarification history is preserved"
+              >
+                {retryBusy ? (
+                  <>
+                    <Spinner /> Retrying…
+                  </>
+                ) : (
+                  <>↻ Retry stage</>
+                )}
+              </button>
+            </div>
+          )}
+          {clickable && (
+            asButton ? (
+              // Tile IS a <button> — the whole card is clickable, so a
+              // static hint suffices.
+              <div className="mt-1 text-[10px] text-slate-400">
+                {selected ? "▼ debate open" : "click to view debate →"}
+              </div>
+            ) : (
+              // Tile is a <div> (because we're rendering a nested Retry
+              // <button>). Provide an explicit inline button so the
+              // debate is still keyboard-reachable.
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpen?.();
+                }}
+                className="mt-1 text-[10px] text-slate-500 hover:text-slate-900 underline focus:outline-none focus:ring-2 focus:ring-slate-400 rounded"
+              >
+                {selected ? "▼ debate open" : "click to view debate →"}
+              </button>
+            )
           )}
         </>
       ) : (

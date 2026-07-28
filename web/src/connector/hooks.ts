@@ -64,6 +64,8 @@ export function useConnectorActions() {
       approveStage: s.approveStage,
       reviseStage: s.reviseStage,
       answerClarifications: s.answerClarifications,
+      cancelSession: s.cancelSession,
+      retryStage: s.retryStage,
     })),
   );
 }

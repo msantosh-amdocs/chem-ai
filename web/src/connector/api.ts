@@ -165,4 +165,38 @@ export const api = {
       ),
     );
   },
+
+  /**
+   * Stop the currently running pipeline. Cooperative cancel — the
+   * in-flight LLM call (if any) will still complete in the
+   * background, but the session flips to `cancelled` immediately and
+   * any stage that was mid-flight is recorded as `error: "Cancelled
+   * by user"` so it can be individually retried.
+   */
+  async cancelSession(
+    sessionId: string,
+  ): Promise<{ ok: true; session: ArchitectureSession }> {
+    return json(
+      await fetch(`/api/session/${encodeURIComponent(sessionId)}/cancel`, {
+        method: "POST",
+      }),
+    );
+  },
+
+  /**
+   * Retry an errored (or cancelled) stage. Discards the failed
+   * cycle's rounds/content but preserves revision + clarification
+   * history, then resumes the pipeline from this stage forward.
+   */
+  async retryStage(
+    sessionId: string,
+    kind: DocumentKind,
+  ): Promise<{ ok: true; sessionId: string }> {
+    return json(
+      await fetch(
+        `/api/session/${encodeURIComponent(sessionId)}/stage/${encodeURIComponent(kind)}/retry`,
+        { method: "POST" },
+      ),
+    );
+  },
 };

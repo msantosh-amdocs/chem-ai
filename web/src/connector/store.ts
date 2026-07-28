@@ -103,11 +103,19 @@ export interface LiveState {
    */
   awaitingClarification: Set<DocumentKind>;
   /**
-   * Per-kind: transient "we just sent an approve / revise / clarify
-   * request to the server" flag so the buttons can render disabled
-   * until the follow-up SSE event arrives.
+   * Per-kind: transient "we just sent an approve / revise / clarify /
+   * retry request to the server" flag so the buttons can render
+   * disabled until the follow-up SSE event arrives.
    */
-  actionInFlight: Partial<Record<DocumentKind, "approve" | "revise" | "clarify">>;
+  actionInFlight: Partial<Record<DocumentKind, "approve" | "revise" | "clarify" | "retry">>;
+  /**
+   * True from the moment the user clicks Stop to the moment the
+   * server confirms `session.cancelled` back via SSE. Used to render
+   * the Stop button in a "Stopping…" state so the user gets immediate
+   * feedback even while the last in-flight LLM call is still
+   * finishing in the background.
+   */
+  cancelling: boolean;
 }
 
 export interface StoreState {
@@ -175,6 +183,19 @@ export interface StoreState {
     kind: DocumentKind,
     answers: ClarificationAnswer[],
   ) => Promise<void>;
+  /**
+   * Stop the currently running pipeline. Cooperative cancel — the
+   * in-flight LLM call (if any) finishes in the background but the
+   * session flips to `cancelled` immediately. Any stage that was
+   * mid-flight can then be re-run individually with `retryStage()`.
+   */
+  cancelSession: () => Promise<void>;
+  /**
+   * Retry an errored (or cancelled) stage. Preserves revision +
+   * clarification history and resumes the pipeline from this stage
+   * onwards.
+   */
+  retryStage: (kind: DocumentKind) => Promise<void>;
 }
 
 export const initialLive: LiveState = {
@@ -192,6 +213,7 @@ export const initialLive: LiveState = {
   awaitingApproval: new Set(),
   awaitingClarification: new Set(),
   actionInFlight: {},
+  cancelling: false,
 };
 
 export function personaToSnapshot(p: SpecialistPersona): SpecialistSnapshot {
@@ -492,15 +514,56 @@ export function applyEvent(
       live.errors[event.kind] = event.message;
       break;
 
+    case "artifact.retrying": {
+      // Server accepted the retry click; clear the error banner so the
+      // tile doesn't render red until artifact.started arrives.
+      delete live.errors[event.kind];
+      delete live.actionInFlight[event.kind];
+      if (session) {
+        const idx = session.artifacts.findIndex((a) => a.kind === event.kind);
+        if (idx >= 0) {
+          const next = [...session.artifacts];
+          next[idx] = {
+            ...next[idx]!,
+            error: undefined,
+            approvalStatus: "not_started",
+            streaming: false,
+          };
+          session = { ...session, artifacts: next, status: "generating" };
+        }
+      }
+      break;
+    }
+
     case "session.completed":
       session = event.session;
       live.running = false;
       live.concepting = false;
       live.refining = false;
+      live.cancelling = false;
       nextTab = "session-documents";
+      break;
+    case "session.cancelled":
+      session = event.session;
+      live.running = false;
+      live.concepting = false;
+      live.refining = false;
+      live.cancelling = false;
+      // Any tile that was mid-flight is now `error: "Cancelled by user"`
+      // on the session; sync the live sets so the UI reflects it.
+      for (const a of event.session.artifacts) {
+        if (a.error) {
+          live.errors[a.kind] = a.error;
+          live.generating.delete(a.kind);
+          live.awaitingApproval.delete(a.kind);
+          live.awaitingClarification.delete(a.kind);
+          delete live.actionInFlight[a.kind];
+        }
+      }
       break;
     case "session.error":
       live.running = false;
+      live.cancelling = false;
       live.error = event.message;
       break;
     case "stream.end":
@@ -937,6 +1000,60 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
   },
+
+  async cancelSession() {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    // Optimistic — flip the button state immediately so the user gets
+    // instant feedback. The subsequent `session.cancelled` SSE event
+    // will clear `cancelling` back to false.
+    set((s) => ({ live: { ...s.live, cancelling: true } }));
+    try {
+      await api.cancelSession(currentSession.id);
+    } catch (err) {
+      set((s) => ({
+        live: {
+          ...s.live,
+          cancelling: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      }));
+    }
+  },
+
+  async retryStage(kind) {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set((s) => {
+      const nextErrors = { ...s.live.errors };
+      delete nextErrors[kind];
+      return {
+        live: {
+          ...s.live,
+          errors: nextErrors,
+          actionInFlight: { ...s.live.actionInFlight, [kind]: "retry" as const },
+        },
+      };
+    });
+    // Reopen the SSE stream if it closed after the terminal cancel — a
+    // retry restarts the pipeline and produces fresh events.
+    if (!get().eventSource) openStream(currentSession.id, set, get);
+    try {
+      await api.retryStage(currentSession.id, kind);
+    } catch (err) {
+      set((s) => {
+        const nextFlight = { ...s.live.actionInFlight };
+        delete nextFlight[kind];
+        return {
+          live: {
+            ...s.live,
+            actionInFlight: nextFlight,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        };
+      });
+    }
+  },
 }));
 
 /**
@@ -984,7 +1101,11 @@ function openStream(
       es.close();
       set({ eventSource: null });
     }
-    if (event.type === "session.completed" || event.type === "session.error") {
+    if (
+      event.type === "session.completed" ||
+      event.type === "session.error" ||
+      event.type === "session.cancelled"
+    ) {
       finish();
     }
   };
@@ -1034,6 +1155,19 @@ function reconcile(
       ? fresh.artifacts
       : s.currentSession.artifacts;
   const live = cloneLive(s.live);
+  // Terminal status arriving via poll (typically because SSE was
+  // dropped) — clear any transient UI flags that only make sense
+  // while the pipeline is actively running.
+  if (
+    fresh.status === "completed" ||
+    fresh.status === "cancelled" ||
+    fresh.status === "error"
+  ) {
+    live.cancelling = false;
+    live.running = false;
+    live.concepting = false;
+    live.refining = false;
+  }
   for (const a of mergedArtifacts) {
     // Only count a stage as "done" when the user has actually approved
     // it — with the interactive approval gate, "has content" no longer

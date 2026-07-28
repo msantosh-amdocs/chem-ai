@@ -32,7 +32,11 @@ export function emit(id: string, event: SessionEvent): void {
       /* listener error should not kill the bus */
     }
   }
-  if (event.type === "session.completed" || event.type === "session.error") {
+  if (
+    event.type === "session.completed" ||
+    event.type === "session.error" ||
+    event.type === "session.cancelled"
+  ) {
     b.done = true;
     setTimeout(() => buses.delete(id), 5 * 60 * 1000).unref?.();
   }

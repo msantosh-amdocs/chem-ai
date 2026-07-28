@@ -6,9 +6,11 @@ import { detectKind, extractText } from "../parsers/index.js";
 import {
   advancePipeline,
   approveArtifact,
+  cancelSession,
   createSession,
   lockAndProduceConcept,
   resetArtifacts,
+  retryStage,
   reviseArtifact,
   runRefinementRound,
   startGeneration,
@@ -256,7 +258,11 @@ router.post(
       // interactive approval gates mean we can no longer schedule
       // cleanup from any single route handler.
       const sub = subscribe(sessionId, (e) => {
-        if (e.type === "session.completed" || e.type === "session.error") {
+        if (
+          e.type === "session.completed" ||
+          e.type === "session.error" ||
+          e.type === "session.cancelled"
+        ) {
           scheduleDocCleanupAfterTerminal(sessionId);
           sub.close();
         }
@@ -488,6 +494,57 @@ router.post(
     }
   },
 );
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * POST /session/:id/stage/:kind/retry — re-run an errored / cancelled stage
+ * ────────────────────────────────────────────────────────────────────────── */
+
+router.post(
+  "/session/:id/stage/:kind/retry",
+  async (req: Request, res: Response, next) => {
+    try {
+      const sessionId = req.params.id;
+      const kind = kindSchema.parse(req.params.kind);
+      const session = await requireSession(sessionId, res);
+      if (!session) return;
+      const docs = docTexts.get(sessionId) ?? [];
+      // Retry runs in the background — the debate loop is long-lived
+      // and the client picks up progress via SSE.
+      runInBackground(
+        sessionId,
+        () => retryStage(session, kind, docs, (e) => emit(sessionId, e)),
+        "retryStage",
+      );
+      res.json({ ok: true, sessionId });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * POST /session/:id/cancel — stop the currently running pipeline
+ *
+ * Cooperative cancellation: the SDK can't interrupt an in-flight LLM
+ * call, so the last one may still complete in the background. But the
+ * session is marked cancelled immediately, and any stage that was
+ * generating/revising is flipped to `error: "Cancelled by user"` so
+ * the user can Retry it individually to resume.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+router.post("/session/:id/cancel", async (req: Request, res: Response, next) => {
+  try {
+    const sessionId = req.params.id;
+    const session = await requireSession(sessionId, res);
+    if (!session) return;
+    // Synchronous — cancelSession() only touches in-memory + persists;
+    // it does NOT wait for the currently-in-flight LLM call to return.
+    await cancelSession(session, (e) => emit(sessionId, e));
+    res.json({ ok: true, session });
+  } catch (err) {
+    next(err);
+  }
+});
 
 /* ────────────────────────────────────────────────────────────────────────── *
  * GET /session/:id/stream — SSE

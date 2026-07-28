@@ -46,6 +46,69 @@ import type {
 const HARD_ROUND_CAP = 20;
 
 /* ────────────────────────────────────────────────────────────────────────── *
+ * Cancellation
+ *
+ * The Cursor SDK does not expose an AbortSignal on `Agent.prompt`, so we
+ * cannot interrupt a single LLM call mid-flight. What we CAN do is
+ * cooperate at every safe checkpoint between calls:
+ *
+ *   - before scheduling the next stage (`advancePipeline`)
+ *   - before starting round 1 (`executeStage`)
+ *   - before starting each subsequent round (`runRoundsAfterOne`)
+ *   - right after every `Promise.all` of parallel drafts returns
+ *
+ * At each checkpoint we consult the per-session `AbortController` and
+ * throw a `CancelledError` if the user has clicked Stop. The catch
+ * blocks in `executeStage` / `resumeStageAfterClarification` recognise
+ * the error type and no-op — `cancelSession()` already updated the
+ * session + in-flight artifact state and emitted the terminal events,
+ * so there is nothing left to do.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Marker error thrown at cooperative cancellation checkpoints. Distinct
+ * from generic `Error` so the executeStage/resumeStage catch blocks
+ * don't accidentally mark cancellation as a stage error.
+ */
+class CancelledError extends Error {
+  constructor() {
+    super("Cancelled by user");
+    this.name = "CancelledError";
+  }
+}
+
+const cancellations = new Map<string, AbortController>();
+
+/** Get (or lazily create) the AbortController for this session. */
+function controllerFor(sessionId: string): AbortController {
+  let ac = cancellations.get(sessionId);
+  if (!ac) {
+    ac = new AbortController();
+    cancellations.set(sessionId, ac);
+  }
+  return ac;
+}
+
+/** True if the user has hit Stop on this session and we haven't cleared it. */
+function isSessionCancelled(sessionId: string): boolean {
+  return cancellations.get(sessionId)?.signal.aborted ?? false;
+}
+
+/** Cooperative checkpoint — throws `CancelledError` if the user has cancelled. */
+function throwIfCancelled(sessionId: string): void {
+  if (isSessionCancelled(sessionId)) throw new CancelledError();
+}
+
+/**
+ * Discard any prior AbortController for this session so a fresh cycle
+ * (retry, regenerate, resume) starts with an un-aborted signal. Called
+ * from every entry point that kicks the pipeline back into motion.
+ */
+function resetCancellation(sessionId: string): void {
+  cancellations.delete(sessionId);
+}
+
+/* ────────────────────────────────────────────────────────────────────────── *
  * Cost accounting
  * ────────────────────────────────────────────────────────────────────────── */
 
@@ -243,7 +306,22 @@ export type SessionEvent =
     }
   | { type: "artifact.completed"; artifact: DocumentArtifact }
   | { type: "artifact.error"; kind: DocumentKind; message: string }
+  /**
+   * User clicked Retry on an errored stage. A fresh `artifact.started`
+   * event will follow once `executeStage` restarts the debate. The
+   * client uses this to clear the "errored" tile state before the
+   * (slightly later) started event arrives.
+   */
+  | { type: "artifact.retrying"; kind: DocumentKind; revisionCycle: number }
   | { type: "session.completed"; session: ArchitectureSession }
+  /**
+   * User clicked Stop. The session is now `cancelled`; any stage that
+   * was mid-flight has been marked `error: "Cancelled by user"` so it
+   * can be retried individually. The last LLM call (if one was in
+   * flight) will still complete in the background, but its result is
+   * discarded at the next cancellation checkpoint.
+   */
+  | { type: "session.cancelled"; session: ArchitectureSession }
   | { type: "session.error"; message: string }
   | { type: "stream.end" };
 
@@ -581,6 +659,7 @@ async function runRound1(
   // wouldn't change any output, only slow things down. Sequentiality
   // is enforced ACROSS departments (see `advancePipeline`), which is
   // what the "one at a time" contract with the user requires.
+  throwIfCancelled(session.id);
   const raws = await Promise.all(
     team.members.map(async (m) => {
       const teammates = team.members.filter((x) => x.id !== m.id);
@@ -604,6 +683,12 @@ async function runRound1(
       return { member: m, raw: text };
     }),
   );
+  // The LLM call above cannot be interrupted mid-flight (SDK has no
+  // AbortSignal); we cooperate at the next safe point instead. If the
+  // user hit Stop while round 1 was running, discard the returned
+  // drafts and bail — `cancelSession()` has already recorded the
+  // "Cancelled by user" error on the artifact.
+  throwIfCancelled(session.id);
 
   for (const { member, raw } of raws) {
     const { draft, clarifications } = extractRound1(raw);
@@ -682,6 +767,7 @@ async function runRoundsAfterOne(
   const rounds = artifact.rounds;
 
   for (let n = 2; n <= effectiveMaxRounds; n++) {
+    throwIfCancelled(session.id);
     const prior = rounds[rounds.length - 1]!;
     const startedAt = new Date().toISOString();
     emit({
@@ -734,6 +820,10 @@ async function runRoundsAfterOne(
         } satisfies StageRoundDraft;
       }),
     );
+    // Cooperative cancel checkpoint: if the user hit Stop during this
+    // round we drop the drafts on the floor and bail out. cancelSession()
+    // has already marked the artifact + session.
+    throwIfCancelled(session.id);
     const converged = drafts.every((d) => d.agreementWithOthers >= settings.threshold);
     const round: StageRound = { n, drafts, startedAt, endedAt: new Date().toISOString() };
     rounds.push(round);
@@ -1046,6 +1136,13 @@ async function executeStage(
     );
     await finalizeForApproval(session, artifact, emit);
   } catch (err) {
+    if (err instanceof CancelledError) {
+      // cancelSession() already recorded the "Cancelled by user"
+      // state on the artifact and emitted session.cancelled. Nothing
+      // more to do here — swallow the marker error so the background
+      // task exits cleanly.
+      return;
+    }
     const message = err instanceof Error ? err.message : String(err);
     await failStage(session, team, artifact, message, emit);
   }
@@ -1085,6 +1182,7 @@ async function resumeStageAfterClarification(
     );
     await finalizeForApproval(session, artifact, emit);
   } catch (err) {
+    if (err instanceof CancelledError) return;
     const message = err instanceof Error ? err.message : String(err);
     await failStage(session, team, artifact, message, emit);
   }
@@ -1127,6 +1225,12 @@ export async function advancePipeline(
   const { session, docTexts } = input;
   if (!session.refinedIdea) {
     throw new Error("Cannot generate artifacts before the idea is locked.");
+  }
+  // Cancelled sessions do not auto-advance. The user must call
+  // `retryStage()` on the errored stage (which resets the signal) to
+  // resume, or `resetArtifacts()` + startGeneration to start over.
+  if (isSessionCancelled(session.id) || session.status === "cancelled") {
+    return;
   }
   // Guard: refuse to schedule while any stage is currently transitional.
   // This makes the function idempotent — a burst of approval clicks
@@ -1279,6 +1383,9 @@ export async function startGeneration(
   emit: Emit,
 ): Promise<void> {
   const { session } = input;
+  // Fresh run — throw away any prior cancel signal so the driver
+  // doesn't short-circuit on the very first checkpoint.
+  resetCancellation(session.id);
   session.status = "generating";
   await persistSession(session);
   await advancePipeline(input, emit);
@@ -1295,7 +1402,120 @@ export async function resetArtifacts(session: ArchitectureSession): Promise<void
   session.status = "locked";
   session.endedAt = undefined;
   if (session.durations) session.durations.perTeam = {};
+  resetCancellation(session.id);
   await persistSession(session);
+}
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Stop + Retry
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Public entry: user hit "Stop" while a run was in flight. Cancels the
+ * per-session AbortController (so the next cooperative checkpoint
+ * bails), marks the session `cancelled`, records "Cancelled by user"
+ * on any stage that was mid-flight, and emits `session.cancelled`.
+ *
+ * The Cursor SDK does not expose an AbortSignal on `Agent.prompt`, so
+ * the currently in-flight LLM call (if any) will still complete in
+ * the background. Its result is discarded at the next cancellation
+ * checkpoint — the artifact state we set here is authoritative.
+ *
+ * Idempotent — no-op on sessions already in a terminal state.
+ */
+export async function cancelSession(
+  session: ArchitectureSession,
+  emit: Emit,
+): Promise<void> {
+  if (
+    session.status === "completed" ||
+    session.status === "cancelled" ||
+    session.status === "error"
+  ) {
+    return;
+  }
+  controllerFor(session.id).abort();
+
+  session.status = "cancelled";
+  session.endedAt = new Date().toISOString();
+  const totalMs = diffMs(session.createdAt, session.endedAt);
+  if (totalMs !== undefined) ensureDurations(session).totalMs = totalMs;
+
+  for (const a of session.artifacts) {
+    if (
+      a.approvalStatus === "generating" ||
+      a.approvalStatus === "revising"
+    ) {
+      a.approvalStatus = "error";
+      a.error = "Cancelled by user";
+      a.streaming = false;
+      a.endedAt = new Date().toISOString();
+      a.durationMs = diffMs(a.startedAt, a.endedAt);
+      a.terminatedBy = "error";
+      if (a.durationMs !== undefined) {
+        ensureDurations(session).perTeam[a.kind] = a.durationMs;
+      }
+      emit({ type: "artifact.error", kind: a.kind, message: "Cancelled by user" });
+    }
+  }
+  await persistSession(session);
+  emit({ type: "session.cancelled", session });
+}
+
+/**
+ * Public entry: user hit "Retry" on an errored stage (either a real
+ * failure or one we cancelled). Discards the fresh cancellation
+ * signal, resets the artifact to a fresh cycle (preserving revisions
+ * + clarification Q&A so context is not lost), and calls
+ * `advancePipeline` — which will pick up this stage next since
+ * `not_started` is the top priority in `nextEligibleStage`.
+ *
+ * If the session was `cancelled`, retrying flips it back to
+ * `generating` so downstream stages will continue running once this
+ * one succeeds.
+ */
+export async function retryStage(
+  session: ArchitectureSession,
+  kind: DocumentKind,
+  docTexts: { filename: string; text: string }[],
+  emit: Emit,
+): Promise<void> {
+  const artifact = session.artifacts.find((a) => a.kind === kind);
+  if (!artifact) throw new Error(`No artifact for ${kind} yet`);
+  if (artifact.approvalStatus !== "error" && !artifact.error) {
+    throw new Error(
+      `Cannot retry ${TITLES[kind]} — status is ${artifact.approvalStatus ?? "unknown"}, not error.`,
+    );
+  }
+  resetCancellation(session.id);
+
+  // Rehydrate the artifact into a clean pre-generate state. We preserve
+  // user-facing history (revisions + clarification Q&A) so the retry
+  // still incorporates any prior feedback, but wipe the failed cycle's
+  // rounds/content/error so the debate really starts over.
+  const revisionCount = artifact.revisionCount ?? 0;
+  artifact.approvalStatus = "not_started";
+  artifact.error = undefined;
+  artifact.content = "";
+  artifact.rounds = [];
+  artifact.finalAgreements = {};
+  artifact.terminatedBy = undefined;
+  artifact.startedAt = undefined;
+  artifact.endedAt = undefined;
+  artifact.durationMs = undefined;
+  artifact.streaming = false;
+
+  session.status = "generating";
+  // Clear the terminal-run bookkeeping so the session no longer looks
+  // done to the client. (endedAt is set on cancel/complete.)
+  session.endedAt = undefined;
+  if (session.durations) {
+    delete session.durations.perTeam[kind];
+    session.durations.totalMs = undefined;
+  }
+  await persistSession(session);
+  emit({ type: "artifact.retrying", kind, revisionCycle: revisionCount + 1 });
+  await advancePipeline({ session, docTexts }, emit);
 }
 
 /* ────────────────────────────────────────────────────────────────────────── *
