@@ -20,6 +20,7 @@ import {
   type SpecialistSnapshot,
   type StageTeamSnapshot,
 } from "../connector";
+import { formatModelLabel } from "../connector/modelMigration";
 
 const ALL: DocumentKind[] = [
   "market",
@@ -228,7 +229,7 @@ export function DocumentsPage() {
               <div className="text-xs text-slate-600 truncate">
                 {activeTeam
                   ? `${activeLead.name} (lead) · ${activeTeam.members.length}-member team`
-                  : `${activeLead.name} · ${activeLead.model}`}
+                  : `${activeLead.name} · ${formatModelLabel(activeLead.model, activeLead.params)}`}
               </div>
             </div>
             {activeArtifact && activeArtifact.terminatedBy && (

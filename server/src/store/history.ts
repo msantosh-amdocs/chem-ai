@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ArchitectureSession } from "../types.js";
+import { migrateSessionSpecialists } from "../agents/modelMigration.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 // server/src/store -> server -> server/.data
@@ -43,14 +44,26 @@ export const history = {
   },
   async get(id: string): Promise<ArchitectureSession | undefined> {
     const all = await readAll();
-    return all.find((s) => s.id === id);
+    const found = all.find((s) => s.id === id);
+    if (!found) return undefined;
+    const migrated = migrateSessionSpecialists(found);
+    if (migrated.changed) {
+      const idx = all.findIndex((s) => s.id === id);
+      if (idx >= 0) {
+        all[idx] = migrated.session;
+        await writeAll(all);
+      }
+    }
+    return migrated.session;
   },
   async upsert(session: ArchitectureSession): Promise<void> {
+    const migrated = migrateSessionSpecialists(session);
+    const next = migrated.session;
     const all = await readAll();
-    const idx = all.findIndex((s) => s.id === session.id);
-    session.updatedAt = new Date().toISOString();
-    if (idx >= 0) all[idx] = session;
-    else all.push(session);
+    const idx = all.findIndex((s) => s.id === next.id);
+    next.updatedAt = new Date().toISOString();
+    if (idx >= 0) all[idx] = next;
+    else all.push(next);
     await writeAll(all);
   },
   async remove(id: string): Promise<void> {

@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import { SpecialistAvatar } from "./SpecialistAvatar";
 import { Markdown } from "../sandbox";
+import { formatModelLabel } from "../connector/modelMigration";
 import type {
   DocumentArtifact,
   SpecialistSnapshot,
@@ -146,7 +147,7 @@ function MemberDraftCard({
           </div>
           {member && (
             <div className="text-[10px] font-mono text-slate-500 truncate">
-              {member.model}
+              {formatModelLabel(member.model, member.params)}
             </div>
           )}
         </div>

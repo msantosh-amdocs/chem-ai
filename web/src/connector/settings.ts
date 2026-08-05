@@ -8,6 +8,7 @@ import {
   type SpecialistPersona,
   type TeamPersona,
 } from "./personas";
+import { migratePersonaModel } from "./modelMigration";
 
 const SPECIALISTS_KEY = "mr.specialists.v1";
 const SETTINGS_KEY = "mr.settings.v1";
@@ -43,6 +44,29 @@ function normalizeTeam(t: TeamPersona | undefined, kind: DocumentKind): TeamPers
   return { kind, minMembers: min, members };
 }
 
+function migrateSpecialistsSettings(
+  settings: SpecialistsSettings,
+): { settings: SpecialistsSettings; changed: boolean } {
+  let changed = false;
+
+  const analystResult = migratePersonaModel(settings.analyst);
+  changed ||= analystResult.changed;
+
+  const teams = settings.teams.map((team) => {
+    const members = team.members.map((member) => {
+      const result = migratePersonaModel(member);
+      changed ||= result.changed;
+      return result.persona;
+    });
+    return { ...team, members };
+  });
+
+  return {
+    settings: { analyst: analystResult.persona, teams },
+    changed,
+  };
+}
+
 export function loadSpecialists(): SpecialistsSettings {
   try {
     const raw = localStorage.getItem(SPECIALISTS_KEY);
@@ -55,7 +79,10 @@ export function loadSpecialists(): SpecialistsSettings {
         : undefined;
       return normalizeTeam(found, kind);
     });
-    return { analyst, teams };
+    const loaded = { analyst, teams };
+    const migrated = migrateSpecialistsSettings(loaded);
+    if (migrated.changed) saveSpecialists(migrated.settings);
+    return migrated.settings;
   } catch {
     return defaultSpecialists();
   }

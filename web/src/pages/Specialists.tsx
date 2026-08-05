@@ -17,6 +17,7 @@ import {
   type SpecialistRole,
   type AgentAccent,
 } from "../connector";
+import { formatModelLabel } from "../connector/modelMigration";
 
 /**
  * The Specialists page renders a compact tile grid for every team, with a
@@ -249,7 +250,7 @@ function SpecialistTile({
           {persona.tagline || "(no tagline)"}
         </div>
         <div className="text-[10px] font-mono text-slate-500 truncate mt-1">
-          {persona.model}
+          {formatModelLabel(persona.model, persona.params)}
         </div>
         <div className="text-[10px] text-slate-400 mt-1">Click to configure →</div>
       </div>

@@ -148,7 +148,19 @@ export function SpecialistEditor({
           <select
             className="field font-mono text-xs"
             value={persona.model}
-            onChange={(e) => onChange({ model: e.target.value, params: {} })}
+            onChange={(e) => {
+              const nextModel = e.target.value;
+              const meta = models.find((m) => m.id === nextModel);
+              const optimizeParam = meta?.parameters?.find((p) => p.id === "optimize_for");
+              const defaultOptimize = optimizeParam?.values?.[0]?.value ?? "balanced";
+              onChange({
+                model: nextModel,
+                params:
+                  nextModel === "auto-smart"
+                    ? { optimize_for: defaultOptimize }
+                    : {},
+              });
+            }}
             aria-label="Model"
           >
             {!selectedModel && (

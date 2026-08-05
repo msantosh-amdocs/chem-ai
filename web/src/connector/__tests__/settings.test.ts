@@ -102,4 +102,35 @@ describe("loadSpecialists", () => {
     expect(localStorage.getItem("mr.specialists.v1")).toBeNull();
     expect(s.teams.length).toBe(PRODUCER_KINDS.length);
   });
+
+  it("migrates legacy Opus and terra models to auto-smart on load", () => {
+    const defaults = loadSpecialists();
+    saveSpecialists({
+      analyst: { ...defaults.analyst, model: "claude-opus-4-8", params: {} },
+      teams: defaults.teams.map((team, idx) =>
+        idx === 0
+          ? {
+              ...team,
+              members: team.members.map((member, midx) =>
+                midx === 1
+                  ? { ...member, model: "gpt-5.6-terra", params: {} }
+                  : member,
+              ),
+            }
+          : team,
+      ),
+    });
+
+    const migrated = loadSpecialists();
+    expect(migrated.analyst.model).toBe("auto-smart");
+    expect(migrated.analyst.params.optimize_for).toBe("intelligence");
+    const karthik = migrated.teams.find((t) => t.kind === "market")?.members[1];
+    expect(karthik?.model).toBe("auto-smart");
+    expect(karthik?.params.optimize_for).toBe("cost");
+
+    const raw = JSON.parse(localStorage.getItem("mr.specialists.v1") ?? "{}") as {
+      analyst: { model: string };
+    };
+    expect(raw.analyst.model).toBe("auto-smart");
+  });
 });
