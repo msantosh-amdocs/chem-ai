@@ -31,6 +31,9 @@ export interface ModelRate {
  * ever priced differently from base opus-4).
  */
 const RATE_TABLE: Array<{ prefix: string; rate: ModelRate }> = [
+  // Cursor Router (Auto Smart) — Cost-mode bundled pricing baseline.
+  { prefix: "auto-smart", rate: { inputPerMTok: 1.25, outputPerMTok: 6, cacheReadMultiplier: 0.2 } },
+
   // Anthropic — public list prices, per 1M tokens.
   { prefix: "claude-opus", rate: { inputPerMTok: 15, outputPerMTok: 75 } },
   { prefix: "claude-sonnet", rate: { inputPerMTok: 3, outputPerMTok: 15 } },

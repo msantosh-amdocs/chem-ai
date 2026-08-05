@@ -46,7 +46,7 @@ export function SpecialistEditor({
       arr.push(m);
       map.set(fam, arr);
     }
-    const order = ["claude", "gpt", "gemini", "grok", "composer", "other"];
+    const order = ["auto-smart", "claude", "gpt", "gemini", "grok", "composer", "other"];
     return Array.from(map.entries()).sort(
       (a, b) => order.indexOf(a[0]) - order.indexOf(b[0]),
     );
@@ -243,6 +243,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function modelFamily(id: string): string {
+  if (id === "auto-smart" || id.startsWith("auto-smart")) return "auto-smart";
   if (id.startsWith("claude")) return "claude";
   if (id.startsWith("gpt")) return "gpt";
   if (id.startsWith("gemini")) return "gemini";
@@ -254,6 +255,7 @@ function modelFamily(id: string): string {
 function familyLabel(fam: string): string {
   return (
     {
+      "auto-smart": "Auto Smart (Cursor Router)",
       claude: "Claude (Anthropic)",
       gpt: "GPT (OpenAI)",
       gemini: "Gemini (Google)",

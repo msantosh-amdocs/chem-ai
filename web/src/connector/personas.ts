@@ -78,8 +78,12 @@ export function accentByPalette(id: string): AgentAccent {
   return ACCENT_PALETTES.find((p) => p.id === id)?.accent ?? ACCENT_PALETTES[0]!.accent;
 }
 
-const DEFAULT_MODEL = "claude-opus-4-8";
-const FAST_MODEL = "gpt-5.6-terra";
+/** Cursor Router — Intelligence mode for deep reasoning roles (replaces Opus). */
+const DEFAULT_MODEL = "auto-smart";
+const DEFAULT_PARAMS = { optimize_for: "intelligence" };
+/** Cursor Router — Cost mode for lighter / high-volume roles. */
+const FAST_MODEL = "auto-smart";
+const FAST_PARAMS = { optimize_for: "cost" };
 
 /* ────────────────────────────────────────────────────────────────────────── *
  * Analyst — clarifies vague market-research ideas before departments run
@@ -109,7 +113,7 @@ lists, and unambiguous questions. Never lecture the user. Never invent
 product specs, buyers, capacities, or routes. When you must proceed with
 a gap, flag the assumption explicitly rather than papering over it.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "aarav",
     accent: accentByPalette("indigo"),
   };
@@ -137,7 +141,7 @@ claim comes from an uploaded document. Never propose consumer / retail
 analysis — this is B2B only. Never invent numbers to make the case look
 stronger — an honest "unknown" is more useful.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "ananya",
     accent: accentByPalette("emerald"),
   };
@@ -161,7 +165,7 @@ disagreeing on a demand or segmentation call. Bring vertical-specific
 regulation into the frame (REACH, cGMP, WLA, DCGI-CDSCO, SEMI standards,
 etc.) rather than treating them as afterthoughts.`,
     model: FAST_MODEL,
-    params: {},
+    params: FAST_PARAMS,
     avatarId: "karthik",
     accent: accentByPalette("teal"),
   };
@@ -183,7 +187,7 @@ one of the top 5 unless there is a compelling reason to exclude it.`,
 agreements (FTA / CEPA / RCEP) and standard bodies (BIS, PESO, CPCB,
 CDSCO) by name when they affect the analysis.`,
     model: FAST_MODEL,
-    params: {},
+    params: FAST_PARAMS,
     avatarId: "meera",
     accent: accentByPalette("amber"),
   };
@@ -213,7 +217,7 @@ step has mass or moles in AND out and an expected yield %. Never guess
 a route to seem competent — an honest "TBD, published route needed" is
 better than a fabricated one.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "prakash",
     accent: accentByPalette("violet"),
   };
@@ -236,7 +240,7 @@ lab-plausible yields versus scaled yields.`,
 on a lab condition or yield claim. Push back when an "industrial" number
 would be implausible at bench scale.`,
     model: FAST_MODEL,
-    params: {},
+    params: FAST_PARAMS,
     avatarId: "sneha",
     accent: accentByPalette("cyan"),
   };
@@ -260,7 +264,7 @@ recovery).`,
 disagreeing on a scale-up assumption. Flag every heat-transfer or
 mass-transfer limit that could kill the process at scale.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "ravi",
     accent: accentByPalette("orange"),
   };
@@ -283,7 +287,7 @@ SEMI S2 apply — and you cite them by name.`,
 practice" as a mitigation. Every High or Critical hazard MUST have a
 specific engineering / administrative control and a verification method.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "aditi",
     accent: accentByPalette("rose"),
   };
@@ -315,7 +319,7 @@ selective route over a longer one even if it needs a more exotic
 catalyst — but justify with a citation or an explicit "TBD, literature
 lookup needed".`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "nikhil",
     accent: accentByPalette("emerald"),
   };
@@ -377,7 +381,7 @@ SIMS / four-point probe). Never claim a node capability without a
 public reference; an honest "TBD — foundry PDK required" beats a
 fabricated spec.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "karthik_semi",
     accent: accentByPalette("indigo"),
   };
@@ -409,7 +413,7 @@ plan that can't support the target pin count, power delivery, or
 thermal envelope. Always spell out the ATE class and expected test
 time — those drive cost/unit as much as the fab wafers.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "anjali_semi",
     accent: accentByPalette("amber"),
   };
@@ -492,7 +496,7 @@ foundry-standard chemistries over exotic ones; when you must
 propose something novel, tag it "TBD — chemistry qualification
 required" rather than fabricate a spec.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "nikhil_semi",
     accent: accentByPalette("emerald"),
   };
@@ -528,7 +532,7 @@ specific gas cabinet + abatement + monitoring plan. Every chemistry
 MUST have a spill-response and waste path. Utilities MUST match the
 target wafer-starts-per-week.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "rahul_semi",
     accent: accentByPalette("rose"),
   };
@@ -556,7 +560,7 @@ an estimate.`,
 DAP) and payment terms explicitly. Never invent a price to make the
 CAPEX look better — flag it as an assumption.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "vikram",
     accent: accentByPalette("violet"),
   };
@@ -579,7 +583,7 @@ lead time.`,
 a make-vs-buy or single-source call. Flag long-lead items (fab tools,
 reactors, HVAC) explicitly.`,
     model: FAST_MODEL,
-    params: {},
+    params: FAST_PARAMS,
     avatarId: "rohit",
     accent: accentByPalette("cyan"),
   };
@@ -603,7 +607,7 @@ narcotic-precursor licences, dual-use restrictions, and BIS/PESO
 certifications where they apply. Give a per-kg / per-wafer price with
 source basis whenever possible.`,
     model: FAST_MODEL,
-    params: {},
+    params: FAST_PARAMS,
     avatarId: "priya",
     accent: accentByPalette("emerald"),
   };
@@ -698,7 +702,7 @@ tool can be shipped to any destination — always check the licence
 picture. Prefer OEM-refurbished with warranty over open-market
 as-is when the node is critical.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "dhruv",
     accent: accentByPalette("teal"),
   };
@@ -725,7 +729,7 @@ action (design-around, licence, wait for expiry, challenge).`,
 landscape — not a legal opinion. Say so explicitly. Never fabricate
 patent numbers. Consider both product AND process patents.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "arjun",
     accent: accentByPalette("rose"),
   };
@@ -747,7 +751,7 @@ overlays in pharma cases.`,
 disagreeing on a claim reading. Highlight patents expiring within
 3 years (near-term opportunity) and within 8 years (long shadow).`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "kavya",
     accent: accentByPalette("orange"),
   };
@@ -774,7 +778,7 @@ to Procurement or Market or an explicit assumption in §11.`,
 by default and you state the life. Never invent a number to hit a
 target IRR — flag the gap in §12.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "neha",
     accent: accentByPalette("indigo"),
   };
@@ -796,7 +800,7 @@ Every line ties to Procurement §3 or a stated basis.`,
 disagreeing on a cost basis. Include solvent-recovery credits in
 consumables when applicable.`,
     model: FAST_MODEL,
-    params: {},
+    params: FAST_PARAMS,
     avatarId: "suresh",
     accent: accentByPalette("teal"),
   };
@@ -818,7 +822,7 @@ CAPEX ±15%.`,
 disagreeing on a price or volume assumption. Never straight-line the
 price without saying so.`,
     model: FAST_MODEL,
-    params: {},
+    params: FAST_PARAMS,
     avatarId: "divya",
     accent: accentByPalette("amber"),
   };
@@ -844,7 +848,7 @@ compress ruthlessly and preserve source IDs so readers can trace back.`,
 requirement IDs (MKT-, PROC-STEP-, IP-, FIN-) so readers can drill.
 No new claims — this artifact ONLY aggregates.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "ishaan",
     accent: accentByPalette("violet"),
   };
@@ -866,7 +870,7 @@ open question verbatim in A.7.`,
 disagreeing on what belongs in Part A vs Part B. Never drop an open
 question.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "tara",
     accent: accentByPalette("cyan"),
   };
@@ -962,7 +966,7 @@ export function newMemberForKind(kind: DocumentKind, idHint: string): Specialist
     roleDescription: `You are a new member of the ${KIND_LABELS[kind]} team. Edit this description to define your specific angle on the artifact — what you emphasize, what you challenge, and what makes your revised drafts distinct from your teammates.`,
     tone: `Voice: professional, specific, evidence-driven. Name teammates when disagreeing.`,
     model: DEFAULT_MODEL,
-    params: {},
+    params: DEFAULT_PARAMS,
     avatarId: "initials",
     accent: ACCENT_PALETTES[paletteIdx]!.accent,
   };
