@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { history } from "../store/history.js";
+import { createLogger, errorFields } from "../logger.js";
 import type {
   ArchitectureSession,
   DocumentArtifact,
@@ -9,15 +10,29 @@ import type {
 
 export const router = Router();
 
+const log = createLogger("history");
+
 router.get("/history", async (_req, res) => {
   const list = await history.list();
   const summaries: ReturnType<typeof summarize>[] = [];
+  let skipped = 0;
   for (const s of list) {
     try {
       summaries.push(summarize(s));
-    } catch {
+    } catch (err) {
       // Skip legacy sessions that don't match the current schema.
+      skipped += 1;
+      log.debug("Skipped a session that does not match the current schema", {
+        sessionId: s?.id,
+        ...errorFields(err),
+      });
     }
+  }
+  if (skipped > 0) {
+    log.warn("Some sessions were left out of the history list", {
+      skipped,
+      total: list.length,
+    });
   }
   const averages = computeAverages(summaries);
   res.json({ sessions: summaries, averages });
@@ -31,11 +46,13 @@ router.get("/history/:id", async (req, res) => {
 
 router.delete("/history/:id", async (req, res) => {
   await history.remove(req.params.id);
+  log.info("Session deleted", { sessionId: req.params.id });
   res.json({ ok: true });
 });
 
 router.delete("/history", async (_req, res) => {
   await history.clear();
+  log.warn("All history cleared");
   res.json({ ok: true });
 });
 

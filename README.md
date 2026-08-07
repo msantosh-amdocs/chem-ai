@@ -185,6 +185,42 @@ Stop with `Ctrl+C` or `./stop.sh`.
 - **History** — every past session with its full artifact pack and how
   each department terminated (converged vs. max rounds).
 
+## Logs
+
+The API writes one structured line per event to stdout, which `start.sh`
+captures in `.logs/server.log`. Every LLM call logs the request before it
+goes out and the response when it lands, correlated by a `callId`:
+
+```
+… INFO  llm   LLM request   callId=xEY3m5yi model=gpt-5 purpose=stage.draft stage=market round=1 speaker="Priya Nair" systemChars=2104 userChars=8830 totalChars=10958 approxTokens=2740
+  ╭─ system (2104 chars)
+  │ You are Priya Nair, Lead Market Analyst…
+  ╰─
+  ╭─ user (1200 chars)
+  │ --- REFINED CONCEPT --- …
+  │ … [+7630 more chars — set LOG_PROMPTS=full to log the whole payload]
+  ╰─
+… INFO  llm   LLM response  callId=xEY3m5yi model=gpt-5 … durationMs=41207 responseChars=9184 inputTokens=2811 outputTokens=2296 totalTokens=5107
+```
+
+Prompts and responses are truncated to 1200 characters by default. To see
+exactly what a specialist was sent, run with `LOG_PROMPTS=full`; to follow
+scheduling, cost accounting, and SSE traffic, run with `LOG_LEVEL=debug`.
+All of it is configured through `.env` — see `.env.example` for the full
+list (`LOG_LEVEL`, `LOG_FORMAT`, `LOG_PROMPTS`, `LOG_RESPONSES`,
+`LOG_PREVIEW_CHARS`, `LOG_COLOR`).
+
+```bash
+# Watch one department's debate as it happens
+grep -E 'stage=market' .logs/server.log
+
+# Follow a single LLM call from request to response
+grep xEY3m5yi .logs/server.log
+```
+
+`LOG_FORMAT=json` emits one JSON object per line instead, for piping into
+a log tool. API keys are never logged.
+
 ## Data
 
 - History and session state → `server/.data/`

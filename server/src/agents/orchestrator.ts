@@ -1,7 +1,8 @@
 import { nanoid } from "nanoid";
-import { promptModel, type PromptResult } from "./llm.js";
+import { promptModel, type PromptRequest, type PromptResult } from "./llm.js";
 import { priceUsage, roundUsd } from "./costs.js";
 import { classifyIndustryFromConcept } from "./industry.js";
+import { createLogger, errorFields } from "../logger.js";
 import {
   refinePrompt,
   refinedConceptPrompt,
@@ -44,6 +45,8 @@ import type {
  * exits even if agreement never converges.
  */
 const HARD_ROUND_CAP = 20;
+
+const log = createLogger("orchestrator");
 
 /* ────────────────────────────────────────────────────────────────────────── *
  * Cancellation
@@ -194,12 +197,16 @@ type CostScope =
 async function tracedPrompt(
   session: ArchitectureSession,
   scope: CostScope,
-  modelId: string,
-  prompt: string,
-  systemHint?: string,
-  params?: Record<string, string>,
+  request: PromptRequest,
 ): Promise<PromptResult> {
-  const res = await promptModel(modelId, prompt, systemHint, params);
+  const res = await promptModel({
+    ...request,
+    context: {
+      purpose: "unknown",
+      ...request.context,
+      sessionId: session.id,
+    },
+  });
 
   if (!session.costs) session.costs = emptySessionCosts();
   const costs = session.costs;
@@ -226,6 +233,17 @@ async function tracedPrompt(
     costs.perTeam[scope.team] = bucket;
   }
   addToStage(costs.total, call);
+
+  log.debug("LLM call accounted", {
+    callId: res.callId,
+    sessionId: session.id,
+    scope: scope.kind === "analyst" ? "analyst" : scope.team,
+    model: res.model,
+    callUsd: call.estimatedUsd,
+    sessionUsd: costs.total.estimatedUsd,
+    sessionCalls: costs.total.llmCalls,
+    usageComplete: costs.usageComplete,
+  });
 
   return res;
 }
@@ -359,6 +377,14 @@ export async function createSession(input: StartInput): Promise<ArchitectureSess
     artifacts: [],
   };
   await history.upsert(session);
+  log.info("Session created", {
+    sessionId: session.id,
+    title: session.title,
+    ideaChars: input.idea.length,
+    documents: input.documents.map((d) => d.filename).join(", ") || undefined,
+    teams: input.specialists.teams.map((t) => `${t.kind}×${t.members.length}`).join(" "),
+    analystModel: input.specialists.analyst.model,
+  });
   return session;
 }
 
@@ -393,6 +419,16 @@ export async function runRefinementRound(
   emit({ type: "refinement.started" });
 
   const analyst = session.specialists.analyst;
+  const roundN = session.refinement.length + 1;
+  log.info("Refinement round started", {
+    sessionId: session.id,
+    round: roundN,
+    analyst: analyst.name,
+    model: analyst.model,
+    answersProvided: latestAnswers.length,
+    documents: docTexts.length,
+  });
+
   const { system, user } = refinePrompt(
     analyst,
     session.idea,
@@ -404,12 +440,22 @@ export async function runRefinementRound(
   const { text: raw } = await tracedPrompt(
     session,
     { kind: "analyst" },
-    analyst.model,
-    user,
-    system,
-    analyst.params,
+    {
+      model: analyst.model,
+      prompt: user,
+      system,
+      params: analyst.params,
+      context: { purpose: "analyst.refine", round: roundN, speaker: analyst.name },
+    },
   );
   const parsed = parseJsonLoose<Partial<AnalystRoundOutput>>(raw) ?? {};
+  if (Object.keys(parsed).length === 0) {
+    log.warn("Refinement response was not parseable JSON — falling back to empty round", {
+      sessionId: session.id,
+      round: roundN,
+      responseChars: raw.length,
+    });
+  }
   const round: RefinementRound = {
     n: session.refinement.length + 1,
     interpretation: (parsed.interpretation ?? "").toString().trim(),
@@ -422,6 +468,12 @@ export async function runRefinementRound(
   session.refinement.push(round);
   session.updatedAt = new Date().toISOString();
   await history.upsert(session);
+  log.info("Refinement round completed", {
+    sessionId: session.id,
+    round: round.n,
+    completeness: round.completeness,
+    questions: round.questions.length,
+  });
   emit({ type: "refinement.completed", round });
   return round;
 }
@@ -446,6 +498,13 @@ export async function lockAndProduceConcept(
   emit({ type: "concept.started" });
 
   const analyst = session.specialists.analyst;
+  log.info("Locking idea — producing refined concept", {
+    sessionId: session.id,
+    analyst: analyst.name,
+    model: analyst.model,
+    refinementRounds: session.refinement.length,
+    documents: docTexts.length,
+  });
   const { system, user } = refinedConceptPrompt(
     analyst,
     session.idea,
@@ -455,10 +514,13 @@ export async function lockAndProduceConcept(
   const { text } = await tracedPrompt(
     session,
     { kind: "analyst" },
-    analyst.model,
-    user,
-    system,
-    analyst.params,
+    {
+      model: analyst.model,
+      prompt: user,
+      system,
+      params: analyst.params,
+      context: { purpose: "analyst.concept", speaker: analyst.name },
+    },
   );
   const content = text.trim();
   session.refinedIdea = { content, createdAt: new Date().toISOString() };
@@ -484,6 +546,13 @@ export async function lockAndProduceConcept(
   }
 
   await history.upsert(session);
+  log.info("Refined concept ready", {
+    sessionId: session.id,
+    conceptChars: content.length,
+    industry: session.industry,
+    processStage: processKindFor(session.industry),
+    analystMs,
+  });
   emit({ type: "concept.completed", refinedIdea: content });
   return session;
 }
@@ -650,6 +719,14 @@ async function runRound1(
     n: 1,
     memberIds: team.members.map((m) => m.id),
   });
+  log.info("Round started", {
+    sessionId: session.id,
+    stage: team.kind,
+    round: 1,
+    members: team.members.map((m) => m.name).join(", "),
+    withUserFeedback: !!promptCtx?.userFeedback,
+    withClarifications: promptCtx?.clarifications?.length ?? 0,
+  });
   const round1Started = new Date().toISOString();
   const drafts: StageRoundDraft[] = [];
   const allClarifications: ClarificationRequest[] = [];
@@ -675,10 +752,18 @@ async function runRound1(
       const { text } = await tracedPrompt(
         session,
         { kind: "team", team: team.kind },
-        m.model,
-        user,
-        system,
-        m.params,
+        {
+          model: m.model,
+          prompt: user,
+          system,
+          params: m.params,
+          context: {
+            purpose: "stage.draft",
+            stage: team.kind,
+            round: 1,
+            speaker: m.name,
+          },
+        },
       );
       return { member: m, raw: text };
     }),
@@ -718,6 +803,14 @@ async function runRound1(
     endedAt: new Date().toISOString(),
   };
   artifact.rounds = [round];
+  log.info("Round completed", {
+    sessionId: session.id,
+    stage: team.kind,
+    round: 1,
+    durationMs: diffMs(round.startedAt, round.endedAt),
+    draftChars: drafts.map((d) => d.content.length).join("/"),
+    clarificationsRaised: allClarifications.length,
+  });
   emit({
     type: "artifact.round.completed",
     kind: team.kind,
@@ -731,6 +824,11 @@ async function runRound1(
       ...allClarifications,
     ];
     artifact.approvalStatus = "awaiting_clarification";
+    log.info("Debate paused — waiting on user clarifications", {
+      sessionId: session.id,
+      stage: team.kind,
+      questions: allClarifications.length,
+    });
     emit({
       type: "artifact.clarification.requested",
       kind: team.kind,
@@ -776,6 +874,14 @@ async function runRoundsAfterOne(
       n,
       memberIds: team.members.map((m) => m.id),
     });
+    log.info("Round started", {
+      sessionId: session.id,
+      stage: team.kind,
+      round: n,
+      maxRounds: effectiveMaxRounds,
+      threshold: settings.threshold,
+      members: team.members.map((m) => m.name).join(", "),
+    });
     const drafts = await Promise.all(
       team.members.map(async (m) => {
         const teammates = team.members.filter((x) => x.id !== m.id);
@@ -802,12 +908,29 @@ async function runRoundsAfterOne(
         const { text: raw } = await tracedPrompt(
           session,
           { kind: "team", team: team.kind },
-          m.model,
-          user,
-          system,
-          m.params,
+          {
+            model: m.model,
+            prompt: user,
+            system,
+            params: m.params,
+            context: {
+              purpose: "stage.revise",
+              stage: team.kind,
+              round: n,
+              speaker: m.name,
+            },
+          },
         );
         const parsed = parseJsonLoose<Partial<ReviseResult>>(raw);
+        if (!parsed) {
+          log.warn("Revise response was not parseable JSON — keeping the previous draft", {
+            sessionId: session.id,
+            stage: team.kind,
+            round: n,
+            speaker: m.name,
+            responseChars: raw.length,
+          });
+        }
         const revised = (parsed?.revised ?? "").toString().trim() || own.content;
         const critique = (parsed?.critique ?? "").toString().trim();
         const agreement = clampScore(parsed?.agreement);
@@ -827,6 +950,20 @@ async function runRoundsAfterOne(
     const converged = drafts.every((d) => d.agreementWithOthers >= settings.threshold);
     const round: StageRound = { n, drafts, startedAt, endedAt: new Date().toISOString() };
     rounds.push(round);
+    log.info("Round completed", {
+      sessionId: session.id,
+      stage: team.kind,
+      round: n,
+      durationMs: diffMs(round.startedAt, round.endedAt),
+      converged,
+      threshold: settings.threshold,
+      agreements: drafts
+        .map((d) => {
+          const name = team.members.find((m) => m.id === d.memberId)?.name ?? d.memberId;
+          return `${name}:${d.agreementWithOthers}`;
+        })
+        .join(" "),
+    });
     emit({
       type: "artifact.round.completed",
       kind: team.kind,
@@ -854,6 +991,15 @@ async function runRoundsAfterOne(
   if (artifact.durationMs !== undefined) {
     ensureDurations(session).perTeam[team.kind] = artifact.durationMs;
   }
+  log.info("Debate finished", {
+    sessionId: session.id,
+    stage: team.kind,
+    rounds: rounds.length,
+    terminatedBy,
+    lead: lead.name,
+    artifactChars: artifact.content.length,
+    durationMs: artifact.durationMs,
+  });
 }
 
 /* ────────────────────────────────────────────────────────────────────────── *
@@ -1029,6 +1175,12 @@ async function finalizeForApproval(
   artifact.streaming = false;
   session.status = "awaiting_user";
   await persistSession(session);
+  log.info("Stage awaiting user approval", {
+    sessionId: session.id,
+    stage: artifact.kind,
+    artifactChars: artifact.content.length,
+    sessionUsd: session.costs?.total.estimatedUsd,
+  });
   emit({ type: "artifact.completed", artifact });
   emit({ type: "artifact.awaiting_approval", kind: artifact.kind, artifact });
 }
@@ -1045,9 +1197,10 @@ async function failStage(
   session: ArchitectureSession,
   team: StageTeam,
   artifact: DocumentArtifact,
-  message: string,
+  cause: unknown,
   emit: Emit,
 ): Promise<void> {
+  const message = cause instanceof Error ? cause.message : String(cause);
   artifact.error = message;
   artifact.approvalStatus = "error";
   artifact.streaming = false;
@@ -1059,6 +1212,13 @@ async function failStage(
   }
   session.status = "awaiting_user";
   await persistSession(session);
+  log.error("Stage failed", {
+    sessionId: session.id,
+    stage: team.kind,
+    roundsCompleted: artifact.rounds.length,
+    durationMs: artifact.durationMs,
+    ...errorFields(cause),
+  });
   emit({ type: "artifact.error", kind: team.kind, message });
 }
 
@@ -1095,6 +1255,17 @@ async function executeStage(
   const artifact = beginStageArtifact(session, team, cycleN);
   session.status = "generating";
   await persistSession(session);
+  log.info("Stage started", {
+    sessionId: session.id,
+    stage: kind,
+    title: TITLES[kind],
+    revisionCycle: cycleN,
+    lead: team.members[0]!.name,
+    members: team.members.map((m) => `${m.name} (${m.model})`).join(", "),
+    threshold: session.settings.threshold,
+    maxRounds: session.settings.maxRounds,
+    terminationPolicy: session.settings.terminationPolicy,
+  });
   emit({
     type: "artifact.started",
     kind,
@@ -1141,10 +1312,14 @@ async function executeStage(
       // state on the artifact and emitted session.cancelled. Nothing
       // more to do here — swallow the marker error so the background
       // task exits cleanly.
+      log.warn("Stage abandoned at a cancellation checkpoint", {
+        sessionId: session.id,
+        stage: kind,
+        roundsCompleted: artifact.rounds.length,
+      });
       return;
     }
-    const message = err instanceof Error ? err.message : String(err);
-    await failStage(session, team, artifact, message, emit);
+    await failStage(session, team, artifact, err, emit);
   }
 }
 
@@ -1168,6 +1343,11 @@ async function resumeStageAfterClarification(
   artifact.streaming = true;
   session.status = "generating";
   await persistSession(session);
+  log.info("Resuming debate after clarifications", {
+    sessionId: session.id,
+    stage: kind,
+    answers: artifact.clarificationAnswers?.length ?? 0,
+  });
 
   try {
     await runRoundsAfterOne(
@@ -1182,9 +1362,14 @@ async function resumeStageAfterClarification(
     );
     await finalizeForApproval(session, artifact, emit);
   } catch (err) {
-    if (err instanceof CancelledError) return;
-    const message = err instanceof Error ? err.message : String(err);
-    await failStage(session, team, artifact, message, emit);
+    if (err instanceof CancelledError) {
+      log.warn("Resumed stage abandoned at a cancellation checkpoint", {
+        sessionId: session.id,
+        stage: kind,
+      });
+      return;
+    }
+    await failStage(session, team, artifact, err, emit);
   }
 }
 
@@ -1198,6 +1383,15 @@ async function finalizePipeline(
   const totalMs = diffMs(session.createdAt, session.endedAt);
   if (totalMs !== undefined) ensureDurations(session).totalMs = totalMs;
   await persistSession(session);
+  log.info("Pipeline completed", {
+    sessionId: session.id,
+    artifacts: session.artifacts.length,
+    totalMs,
+    llmCalls: session.costs?.total.llmCalls,
+    totalTokens: session.costs?.total.totalTokens,
+    estimatedUsd: session.costs?.total.estimatedUsd,
+    usageComplete: session.costs?.usageComplete,
+  });
   emit({ type: "session.completed", session });
 }
 
@@ -1230,6 +1424,7 @@ export async function advancePipeline(
   // `retryStage()` on the errored stage (which resets the signal) to
   // resume, or `resetArtifacts()` + startGeneration to start over.
   if (isSessionCancelled(session.id) || session.status === "cancelled") {
+    log.debug("Pipeline not advancing — session is cancelled", { sessionId: session.id });
     return;
   }
   // Guard: refuse to schedule while any stage is currently transitional.
@@ -1237,6 +1432,11 @@ export async function advancePipeline(
   // won't spin up parallel departments.
   for (const a of session.artifacts) {
     if (a.approvalStatus === "generating" || a.approvalStatus === "revising") {
+      log.debug("Pipeline not advancing — a stage is already in flight", {
+        sessionId: session.id,
+        stage: a.kind,
+        status: a.approvalStatus,
+      });
       return;
     }
   }
@@ -1249,9 +1449,12 @@ export async function advancePipeline(
     );
     if (!stillPending && session.status !== "completed") {
       await finalizePipeline(session, emit);
+    } else {
+      log.debug("Pipeline idle — waiting on the user", { sessionId: session.id });
     }
     return;
   }
+  log.debug("Pipeline advancing", { sessionId: session.id, nextStage: next.kind });
   await executeStage(session, next.kind, docTexts, emit);
   // Auto-advance would be the wrong call here — the just-executed
   // stage either paused for clarifications or paused for approval.
@@ -1280,6 +1483,11 @@ export async function approveArtifact(
   artifact.approvedAt = new Date().toISOString();
   session.status = "generating";
   await persistSession(session);
+  log.info("Stage approved by user", {
+    sessionId: session.id,
+    stage: kind,
+    revisionCycles: (artifact.revisionCount ?? 0) + 1,
+  });
   emit({ type: "artifact.approved", kind, artifact });
   await advancePipeline({ session, docTexts }, emit);
 }
@@ -1323,6 +1531,12 @@ export async function reviseArtifact(
   artifact.approvalStatus = "revising";
   session.status = "generating";
   await persistSession(session);
+  log.info("Stage revision requested by user", {
+    sessionId: session.id,
+    stage: kind,
+    revisionCycle: nextN + 1,
+    feedback: trimmed,
+  });
   emit({ type: "artifact.revising", kind, feedback: trimmed, revisionCycle: nextN + 1 });
 
   // Kick a fresh cycle for this stage. `executeStage` will reset the
@@ -1367,6 +1581,13 @@ export async function submitClarifications(
   ];
   artifact.clarificationAnswers = merged;
   await persistSession(session);
+  log.info("Clarifications answered by user", {
+    sessionId: session.id,
+    stage: kind,
+    submitted: answers.length,
+    accepted: filtered.length,
+    blank: filtered.filter((a) => !a.answer.trim()).length,
+  });
   emit({ type: "artifact.clarification.answered", kind, answers: merged });
   await resumeStageAfterClarification(session, kind, docTexts, emit);
 }
@@ -1388,6 +1609,13 @@ export async function startGeneration(
   resetCancellation(session.id);
   session.status = "generating";
   await persistSession(session);
+  log.info("Generation started", {
+    sessionId: session.id,
+    title: session.title,
+    industry: session.industry,
+    stages: sequentialOrderFor(session).join(" → "),
+    documents: input.docTexts.length,
+  });
   await advancePipeline(input, emit);
 }
 
@@ -1398,6 +1626,10 @@ export async function startGeneration(
  * regenerate implies "start over".
  */
 export async function resetArtifacts(session: ArchitectureSession): Promise<void> {
+  log.info("Discarding all artifacts for a full regenerate", {
+    sessionId: session.id,
+    discarded: session.artifacts.length,
+  });
   session.artifacts = [];
   session.status = "locked";
   session.endedAt = undefined;
@@ -1432,9 +1664,21 @@ export async function cancelSession(
     session.status === "cancelled" ||
     session.status === "error"
   ) {
+    log.debug("Cancel ignored — session is already in a terminal state", {
+      sessionId: session.id,
+      status: session.status,
+    });
     return;
   }
   controllerFor(session.id).abort();
+  log.warn("Session cancelled by user", {
+    sessionId: session.id,
+    status: session.status,
+    inFlight: session.artifacts
+      .filter((a) => a.approvalStatus === "generating" || a.approvalStatus === "revising")
+      .map((a) => a.kind)
+      .join(", "),
+  });
 
   session.status = "cancelled";
   session.endedAt = new Date().toISOString();
@@ -1488,6 +1732,11 @@ export async function retryStage(
     );
   }
   resetCancellation(session.id);
+  log.info("Stage retry requested by user", {
+    sessionId: session.id,
+    stage: kind,
+    previousError: artifact.error,
+  });
 
   // Rehydrate the artifact into a clean pre-generate state. We preserve
   // user-facing history (revisions + clarification Q&A) so the retry
@@ -1587,6 +1836,11 @@ export async function sweepInterruptedSessions(): Promise<{
     if (totalMs !== undefined) ensureDurations(session).totalMs = totalMs;
 
     await persistSession(session);
+    log.warn("Recovered a session interrupted by a server restart", {
+      sessionId: session.id,
+      title: session.title,
+      stages: affectedKinds.join(", ") || "(none in flight)",
+    });
     swept.push({ id: session.id, title: session.title, kinds: affectedKinds });
   }
   return { scanned: all.length, swept };

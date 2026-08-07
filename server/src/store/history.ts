@@ -4,6 +4,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ArchitectureSession } from "../types.js";
 import { migrateSessionSpecialists } from "../agents/modelMigration.js";
+import { createLogger, errorFields } from "../logger.js";
+
+const log = createLogger("history");
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 // server/src/store -> server -> server/.data
@@ -22,8 +25,20 @@ async function readAll(): Promise<ArchitectureSession[]> {
   try {
     const raw = await readFile(HISTORY_FILE, "utf8");
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
+    if (!Array.isArray(parsed)) {
+      log.warn("History file does not contain an array — treating it as empty", {
+        file: HISTORY_FILE,
+      });
+      return [];
+    }
+    return parsed;
+  } catch (err) {
+    // An unreadable/corrupt history file must not take the API down, but
+    // it does mean every session on disk is invisible until it's fixed.
+    log.error("Could not read the history file — continuing with no history", {
+      file: HISTORY_FILE,
+      ...errorFields(err),
+    });
     return [];
   }
 }
@@ -31,8 +46,17 @@ async function readAll(): Promise<ArchitectureSession[]> {
 async function writeAll(list: ArchitectureSession[]): Promise<void> {
   // Serialize writes so concurrent updates don't clobber one another.
   writeQueue = writeQueue.then(async () => {
-    await ensureFile();
-    await writeFile(HISTORY_FILE, JSON.stringify(list, null, 2), "utf8");
+    try {
+      await ensureFile();
+      await writeFile(HISTORY_FILE, JSON.stringify(list, null, 2), "utf8");
+      log.trace("History written", { file: HISTORY_FILE, sessions: list.length });
+    } catch (err) {
+      log.error("Could not write the history file — this update is lost", {
+        file: HISTORY_FILE,
+        sessions: list.length,
+        ...errorFields(err),
+      });
+    }
   });
   return writeQueue;
 }

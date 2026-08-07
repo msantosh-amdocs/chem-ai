@@ -18,6 +18,7 @@ import {
   type SessionEvent,
 } from "../agents/orchestrator.js";
 import { emit, subscribe } from "../agents/bus.js";
+import { createLogger, errorFields } from "../logger.js";
 import { history } from "../store/history.js";
 import type {
   ArchitectureSession,
@@ -28,6 +29,8 @@ import type {
 } from "../types.js";
 
 export const router = Router();
+
+const log = createLogger("session");
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -153,7 +156,10 @@ function scheduleDocCleanupAfterTerminal(sessionId: string): void {
   // Wait 5 minutes past the terminal event before dropping the cache —
   // long enough for a quick "regenerate" click, short enough that
   // abandoned sessions don't leak memory indefinitely.
-  setTimeout(() => docTexts.delete(sessionId), 5 * 60 * 1000).unref?.();
+  setTimeout(() => {
+    docTexts.delete(sessionId);
+    log.debug("Dropped cached document text", { sessionId });
+  }, 5 * 60 * 1000).unref?.();
 }
 
 /** Fire-and-forget wrapper around a pipeline action that emits + logs errors. */
@@ -162,12 +168,24 @@ function runInBackground(
   action: () => Promise<void>,
   label: string,
 ): void {
+  const startedAt = Date.now();
+  log.debug("Background task started", { sessionId, task: label });
   void (async () => {
     try {
       await action();
+      log.debug("Background task finished", {
+        sessionId,
+        task: label,
+        durationMs: Date.now() - startedAt,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`${label} failed:`, err);
+      log.error("Background task failed", {
+        sessionId,
+        task: label,
+        durationMs: Date.now() - startedAt,
+        ...errorFields(err),
+      });
       const failEvent: SessionEvent = { type: "session.error", message };
       emit(sessionId, failEvent);
     }
@@ -228,10 +246,22 @@ router.post(
         try {
           text = await extractText(f.buffer, kind);
         } catch (err) {
+          log.warn("Rejected an upload we could not parse", {
+            filename: f.originalname,
+            kind,
+            sizeBytes: f.size,
+            ...errorFields(err),
+          });
           return res
             .status(400)
             .json({ error: `Failed to parse ${f.originalname}: ${(err as Error).message}` });
         }
+        log.debug("Parsed uploaded document", {
+          filename: f.originalname,
+          kind,
+          sizeBytes: f.size,
+          chars: text.length,
+        });
         documents.push({
           id: nanoid(),
           filename: f.originalname,
@@ -551,6 +581,7 @@ router.post("/session/:id/cancel", async (req: Request, res: Response, next) => 
  * ────────────────────────────────────────────────────────────────────────── */
 
 router.get("/session/:id/stream", (req: Request, res: Response) => {
+  const sessionId = req.params.id;
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
@@ -565,8 +596,14 @@ router.get("/session/:id/stream", (req: Request, res: Response) => {
     res.write(`: ping\n\n`);
   }, 15000);
 
-  const sub = subscribe(req.params.id, (e) => write(e));
+  const sub = subscribe(sessionId, (e) => write(e));
   for (const e of sub.replay) write(e);
+  const openedAt = Date.now();
+  log.debug("SSE client subscribed", {
+    sessionId,
+    replayed: sub.replay.length,
+    sessionDone: sub.done,
+  });
 
   if (sub.done) {
     write({ type: "stream.end" });
@@ -579,6 +616,10 @@ router.get("/session/:id/stream", (req: Request, res: Response) => {
   req.on("close", () => {
     clearInterval(heartbeat);
     sub.close();
+    log.debug("SSE client disconnected", {
+      sessionId,
+      connectedMs: Date.now() - openedAt,
+    });
   });
 });
 

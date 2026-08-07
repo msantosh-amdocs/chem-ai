@@ -3,20 +3,39 @@ import "./env.js";
 import express, { type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import { config } from "./env.js";
+import { createLogger, errorFields } from "./logger.js";
 import { router as sessionRouter } from "./routes/session.js";
 import { router as historyRouter } from "./routes/history.js";
 import { router as modelsRouter } from "./routes/models.js";
 import { sweepInterruptedSessions } from "./agents/orchestrator.js";
 
+const log = createLogger("http");
+const boot = createLogger("boot");
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
-// Concise request log so we can trace what the UI is doing.
-app.use((req, _res, next) => {
-  if (req.path.startsWith("/api") && req.path !== "/api/health") {
-    console.log(`→ ${req.method} ${req.path}`);
-  }
+// One line per completed request so we can trace what the UI is doing.
+// Health checks poll constantly and would drown everything else, so they
+// only show up at debug level.
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/api")) return next();
+  const isHealth = req.path === "/api/health";
+  // Routing rewrites `req.url` (and therefore `req.path`) as it descends
+  // into mounted routers, so snapshot the request line before that
+  // happens — otherwise `/api/history` logs as `/history`.
+  const line = `${req.method} ${req.originalUrl}`;
+  const startedAt = Date.now();
+  // "close" rather than "finish" so aborted requests (and SSE streams the
+  // browser drops) still produce exactly one line.
+  res.on("close", () => {
+    const level = isHealth ? "debug" : res.statusCode >= 500 ? "error" : "info";
+    log[level](line, {
+      status: res.statusCode,
+      durationMs: Date.now() - startedAt,
+    });
+  });
   next();
 });
 
@@ -32,9 +51,9 @@ app.use("/api", sessionRouter);
 app.use("/api", historyRouter);
 app.use("/api", modelsRouter);
 
-app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
   const msg = err instanceof Error ? err.message : "unknown error";
-  console.error(err);
+  log.error(`Request failed: ${req.method} ${req.originalUrl}`, errorFields(err));
   res.status(400).json({ error: msg });
 });
 
@@ -46,25 +65,48 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 async function bootstrap(): Promise<void> {
   try {
     const { scanned, swept } = await sweepInterruptedSessions();
-    if (swept.length > 0) {
-      console.log(
-        `↻ Interrupted-session sweep: recovered ${swept.length}/${scanned} session(s).`,
-      );
-      for (const s of swept) {
-        const stages = s.kinds.length > 0 ? s.kinds.join(", ") : "(no in-flight stage)";
-        console.log(`   • ${s.title} [${s.id}] — stages: ${stages}`);
-      }
-    }
+    boot.info("Interrupted-session sweep finished", {
+      scanned,
+      recovered: swept.length,
+    });
   } catch (err) {
-    console.warn("↻ Interrupted-session sweep failed (continuing):", err);
+    boot.warn("Interrupted-session sweep failed — continuing startup", errorFields(err));
   }
 
-  app.listen(config.port, () => {
-    console.log(`Chem AI API listening on http://localhost:${config.port}`);
+  const server = app.listen(config.port, () => {
+    boot.info(`Chem AI API listening on http://localhost:${config.port}`, {
+      port: config.port,
+      logLevel: config.log.level,
+      logFormat: config.log.format,
+      logPrompts: config.log.prompts,
+      logResponses: config.log.responses,
+      cursorKeyPresent: !!process.env.CURSOR_API_KEY,
+    });
     if (!process.env.CURSOR_API_KEY) {
-      console.warn("⚠  CURSOR_API_KEY not set — LLM calls will fail. Add it to .env.");
+      boot.warn("CURSOR_API_KEY not set — LLM calls will fail. Add it to .env.");
     }
   });
+
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      boot.error(`Port ${config.port} is already in use — is another Chem AI already running?`, {
+        port: config.port,
+      });
+    } else {
+      boot.error("HTTP server error", errorFields(err));
+    }
+    process.exit(1);
+  });
 }
+
+// A rejected promise nobody awaited (a detached pipeline task, an SDK
+// callback) would otherwise print a bare stack with no context.
+process.on("unhandledRejection", (reason) => {
+  boot.error("Unhandled promise rejection", errorFields(reason));
+});
+process.on("uncaughtException", (err) => {
+  boot.error("Uncaught exception — shutting down", errorFields(err));
+  process.exit(1);
+});
 
 bootstrap();
