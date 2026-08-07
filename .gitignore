@@ -34,6 +34,9 @@ coverage/
 *.lcov
 .nyc_output/
 
+# ── AI agent tooling output ──────────────────────────────────────────────
+.agent-trace/
+
 # ── Editor & OS metadata ─────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
